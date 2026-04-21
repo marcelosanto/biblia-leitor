@@ -75,7 +75,6 @@ impl BibliaApp {
 
 impl eframe::App for BibliaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-
         // 1. MENU LATERAL (DESKTOP)
         #[cfg(not(target_os = "android"))]
         egui::Panel::left("menu_livros").show_inside(ui, |ui| {
@@ -90,7 +89,6 @@ impl eframe::App for BibliaApp {
                     self.capitulo = 1;
                     self.carregar_capitulo();
                 }
-                .
             });
         });
 
