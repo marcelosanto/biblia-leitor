@@ -6,7 +6,7 @@ mod db;
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 
-// ESTA É A PARTE PARA O ANDROID
+//ANDROID
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
@@ -36,7 +36,7 @@ enum Tela {
 }
 
 pub struct BibliaApp {
-    livro_selecionado: i32, // ID do livro na tabela 'books'
+    livro_selecionado: i32,
     nome_livro: String,
     capitulo: i32,
     versiculos: Vec<(i32, String)>,
@@ -57,7 +57,6 @@ impl BibliaApp {
     fn carregar_capitulo(&mut self) {
         let path = crate::db::get_db_path();
 
-        // Nota: No Desktop, use o caminho relativo. No Android, precisaremos da lógica de cópia de assets.
         if let Ok(conn) = rusqlite::Connection::open(path) {
             let mut stmt = conn
                 .prepare("SELECT verse, text FROM verses WHERE book = ?1 AND chapter = ?2")
@@ -76,12 +75,13 @@ impl BibliaApp {
 
 impl eframe::App for BibliaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+
         // 1. MENU LATERAL (DESKTOP)
         #[cfg(not(target_os = "android"))]
         egui::Panel::left("menu_livros").show_inside(ui, |ui| {
             ui.heading("Livros");
             egui::ScrollArea::vertical().show(ui, |ui| {
-                // Aqui você pode fazer um SELECT na tabela 'books' para preencher isso
+                //  fazer um SELECT na tabela 'books' para preencher isso
                 if ui
                     .selectable_label(self.livro_selecionado == 1, "Gênesis")
                     .clicked()
@@ -90,7 +90,7 @@ impl eframe::App for BibliaApp {
                     self.capitulo = 1;
                     self.carregar_capitulo();
                 }
-                // Adicione outros livros aqui...
+                .
             });
         });
 
