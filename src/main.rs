@@ -5,6 +5,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Minha Bíblia em Rust Desktop",
         options,
-        Box::new(|_cc| Ok(Box::new(BibliaApp::default()))),
+        Box::new(|cc| Ok(Box::new(BibliaApp::new(cc)))),
     )
 }
