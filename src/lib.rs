@@ -268,73 +268,92 @@ impl eframe::App for BibliaApp {
                 });
             });
 
+        let mut frame = egui::Frame::central_panel(&ui.ctx().global_style());
+        frame.inner_margin.top = 40;
+
         // 3. ÁREA DE LEITURA
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.columns(3, |columns| {
-                    columns[0].with_layout(
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            if ui
-                                .add_enabled(self.capitulo > 1, egui::Button::new("⬅ Anterior"))
-                                .clicked()
-                            {
-                                self.livro_anterior();
-                            }
-                        },
-                    );
+        egui::CentralPanel::default()
+            .frame(frame)
+            .show_inside(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        // Isso centraliza o grupo horizontal dentro da largura disponível
+                        let total_width = ui.available_width();
 
-                    columns[1].vertical_centered(|ui| {
-                        ui.heading(format!("{} {}", self.nome_livro, self.capitulo));
+                        // Estimativa de largura do conjunto (ajuste conforme necessário)
+                        let group_width = 220.0;
+                        ui.add_space((total_width - group_width) / 2.0);
+
+                        // --- Botão Esquerdo (Seta minimalista) ---
+                        let btn_prev =
+                            egui::Button::new(egui::RichText::new("<").size(24.0)).frame(false);
+                        if ui.add_enabled(self.capitulo > 1, btn_prev).clicked() {
+                            self.livro_anterior();
+                        }
+
+                        ui.add_space(20.0); // Espaço entre seta e texto
+
+                        // --- Título: Nome (Preto) e Capítulo (Cinza) ---
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(&self.nome_livro)
+                                    .heading()
+                                    .strong()
+                                    .color(ui.visuals().widgets.active.fg_stroke.color),
+                            ); // Cor principal
+
+                            ui.add_space(8.0);
+
+                            ui.label(
+                                egui::RichText::new(self.capitulo.to_string())
+                                    .heading()
+                                    .color(egui::Color32::from_gray(140)),
+                            ); // Cor cinza da imagem
+                        });
+
+                        ui.add_space(20.0); // Espaço entre texto e seta
+
+                        // --- Botão Direito (Seta minimalista) ---
+                        let n_cap = self.total_capitulos_do_livro(self.livro_selecionado);
+                        let btn_next =
+                            egui::Button::new(egui::RichText::new(">").size(24.0)).frame(false);
+                        if ui.add_enabled(self.capitulo < n_cap, btn_next).clicked() {
+                            self.proximo_livro();
+                        }
                     });
-
-                    columns[2].with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            let n_cap = self.total_capitulos_do_livro(self.livro_selecionado);
-
-                            if ui
-                                .add_enabled(self.capitulo < n_cap, egui::Button::new("Próximo ➡"))
-                                .clicked()
-                            {
-                                self.proximo_livro();
-                            }
-                        },
-                    );
                 });
+
+                ui.separator();
+
+                let altura_do_texto = ui.text_style_height(&egui::TextStyle::Body);
+                let total_versiculos = self.versiculos.len();
+
+                egui::ScrollArea::vertical().show_rows(
+                    ui,
+                    altura_do_texto,
+                    total_versiculos,
+                    |ui, _range| {
+                        // 'range' contém apenas os índices visíveis, ex: 100..115
+                        for (num, texto) in &self.versiculos {
+                            ui.label(format!("{num}: {texto}"));
+                        }
+                    },
+                );
+
+                //     egui::ScrollArea::vertical().show(ui, |ui| {
+                //         for (num, texto) in &self.versiculos {
+                //             ui.horizontal_top(|ui| {
+                //                 // Estiliza o número do versículo
+                //                 ui.label(
+                //                     egui::RichText::new(num.to_string())
+                //                         .small()
+                //                         .color(egui::Color32::GRAY),
+                //                 );
+                //                 ui.label(texto);
+                //             });
+                //             ui.add_space(8.0); // Espaçamento entre versículos
+                //         }
+                //     });
             });
-
-            ui.separator();
-
-            let altura_do_texto = ui.text_style_height(&egui::TextStyle::Body);
-            let total_versiculos = self.versiculos.len();
-
-            egui::ScrollArea::vertical().show_rows(
-                ui,
-                altura_do_texto,
-                total_versiculos,
-                |ui, _range| {
-                    // 'range' contém apenas os índices visíveis, ex: 100..115
-                    for (num, texto) in &self.versiculos {
-                        ui.label(format!("{num}: {texto}"));
-                    }
-                },
-            );
-
-            //     egui::ScrollArea::vertical().show(ui, |ui| {
-            //         for (num, texto) in &self.versiculos {
-            //             ui.horizontal_top(|ui| {
-            //                 // Estiliza o número do versículo
-            //                 ui.label(
-            //                     egui::RichText::new(num.to_string())
-            //                         .small()
-            //                         .color(egui::Color32::GRAY),
-            //                 );
-            //                 ui.label(texto);
-            //             });
-            //             ui.add_space(8.0); // Espaçamento entre versículos
-            //         }
-            //     });
-        });
     }
 }
