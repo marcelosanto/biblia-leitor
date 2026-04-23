@@ -18,9 +18,9 @@ pub fn get_db_path() -> PathBuf {
             fs::write(&db_file, db_bytes).expect("Falha ao gravar o banco de dados no Android");
         }
 
-        if let Ok(meta) = fs::metadata(&db_file) {
-            println!("Tamanho do arquivo DB no Android: {} bytes", meta.len());
-        }
+        // if let Ok(meta) = fs::metadata(&db_file) {
+        //     println!("Tamanho do arquivo DB no Android: {} bytes", meta.len());
+        // }
 
         db_file
     }
