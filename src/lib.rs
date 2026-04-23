@@ -285,8 +285,12 @@ impl eframe::App for BibliaApp {
                         ui.add_space((total_width - group_width) / 2.0);
 
                         // --- Botão Esquerdo (Seta minimalista) ---
-                        let btn_prev =
-                            egui::Button::new(egui::RichText::new("<").size(24.0)).frame(false);
+                        let btn_prev = egui::Button::new(
+                            egui::RichText::new("<")
+                                .size(24.0)
+                                .color(egui::Color32::from_rgb(138, 154, 91)),
+                        )
+                        .frame(false);
                         if ui.add_enabled(self.capitulo > 1, btn_prev).clicked() {
                             self.livro_anterior();
                         }
@@ -316,7 +320,7 @@ impl eframe::App for BibliaApp {
                         // --- Botão Direito (Seta minimalista) ---
                         let n_cap = self.total_capitulos_do_livro(self.livro_selecionado);
                         let btn_next =
-                            egui::Button::new(egui::RichText::new(">").size(24.0)).frame(false);
+                            egui::Button::new(egui::RichText::new(">").size(24.0).color(egui::Color32::from_rgb(138, 154, 91)).frame(false);
                         if ui.add_enabled(self.capitulo < n_cap, btn_next).clicked() {
                             self.proximo_livro();
                         }
