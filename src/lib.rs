@@ -226,10 +226,6 @@ impl eframe::App for BibliaApp {
                     .add_enabled(self.capitulo > 1, egui::Button::new("⬅ Anterior"))
                     .clicked()
                 {
-                    // if self.capitulo > 1 {
-                    //     self.capitulo -= 1;
-                    //     self.carregar_capitulo();
-                    // }
                     self.livro_anterior();
                 }
                 let n_capitulos = self.total_capitulos_do_livro(self.livro_selecionado);
@@ -238,16 +234,76 @@ impl eframe::App for BibliaApp {
                     .add_enabled(self.capitulo < n_capitulos, egui::Button::new("Próximo ➡"))
                     .clicked()
                 {
-                    // self.capitulo += 1;
-                    // self.carregar_capitulo();
                     self.proximo_livro();
                 }
             });
         });
 
+        let mut margin = egui::Margin::same(0);
+
+        #[cfg(target_os = "android")]
+        {
+            // Geralmente 24.0 a 30.0 pontos são suficientes para pular a barra de status
+            margin.top = 30;
+            margin.bottom = 10; // Evita a barra de gestos do Android
+        }
+
+        egui::Panel::top("header")
+            .frame(egui::Frame::NONE.inner_margin(margin))
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button(egui::RichText::new("☰").size(20.0)).clicked() {
+                        //self.menu_aberto = !self.menu_aberto;
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
+                            // self.tela_atual = Tela::Busca; // Troca para a tela de pesquisa
+                        }
+
+                        ui.centered_and_justified(|ui| {
+                            ui.heading("Bíblia Egui");
+                        });
+                    });
+                });
+            });
+
         // 3. ÁREA DE LEITURA
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.heading(format!("Capítulo {}", self.capitulo));
+            ui.horizontal(|ui| {
+                ui.columns(3, |columns| {
+                    columns[0].with_layout(
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            if ui
+                                .add_enabled(self.capitulo > 1, egui::Button::new("⬅ Anterior"))
+                                .clicked()
+                            {
+                                self.livro_anterior();
+                            }
+                        },
+                    );
+
+                    columns[1].vertical_centered(|ui| {
+                        ui.heading(format!("{} {}", self.nome_livro, self.capitulo));
+                    });
+
+                    columns[2].with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let n_cap = self.total_capitulos_do_livro(self.livro_selecionado);
+
+                            if ui
+                                .add_enabled(self.capitulo < n_cap, egui::Button::new("Próximo ➡"))
+                                .clicked()
+                            {
+                                self.proximo_livro();
+                            }
+                        },
+                    );
+                });
+            });
+
             ui.separator();
 
             let altura_do_texto = ui.text_style_height(&egui::TextStyle::Body);
