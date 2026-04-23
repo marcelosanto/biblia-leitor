@@ -176,6 +176,26 @@ impl BibliaApp {
         self.capitulo += 1;
         self.carregar_capitulo();
     }
+
+    fn formatar_elevado(&self, valor: &i32) -> String {
+        valor
+            .to_string()
+            .chars()
+            .map(|c| match c {
+                '0' => '⁰',
+                '1' => '¹',
+                '2' => '²',
+                '3' => '³',
+                '4' => '⁴',
+                '5' => '⁵',
+                '6' => '⁶',
+                '7' => '⁷',
+                '8' => '⁸',
+                '9' => '⁹',
+                _ => c,
+            })
+            .collect()
+    }
 }
 
 impl eframe::App for BibliaApp {
@@ -343,7 +363,8 @@ impl eframe::App for BibliaApp {
                     |ui, _range| {
                         // 'range' contém apenas os índices visíveis, ex: 100..115
                         for (num, texto) in &self.versiculos {
-                            ui.label(format!("{num}: {texto}"));
+                            let num_f = self.formatar_elevado(num);
+                            ui.label(format!("{num_f} {texto}"));
                         }
                     },
                 );
