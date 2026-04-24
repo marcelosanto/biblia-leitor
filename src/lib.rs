@@ -42,12 +42,19 @@ pub struct Livro {
     pub abbrev: String,
 }
 
+pub struct Versiculo {
+    pub numero: i32,
+    pub numero_formatado: String,
+    pub texto: String,
+}
+
 pub struct BibliaApp {
     livro_selecionado: i32,
     nome_livro: String,
     lista_livros: Vec<Livro>,
     capitulo: i32,
-    versiculos: Vec<(i32, String)>,
+    versiculos: Vec<Versiculo>,
+    menu_aberto: bool,
 }
 
 impl BibliaApp {
@@ -60,6 +67,7 @@ impl BibliaApp {
             lista_livros: Vec::new(),
             capitulo: 1,
             versiculos: Vec::new(),
+            menu_aberto: false,
         };
 
         app.carregar_lista_livros();
@@ -135,7 +143,17 @@ impl BibliaApp {
 
                 let iter = stmt
                     .query_map([self.livro_selecionado, self.capitulo], |row| {
-                        Ok((row.get(0)?, row.get(1)?))
+                        let num: i32 = row.get(0)?;
+                        let texto: String = row.get(1)?;
+
+                        // Converte aqui, apenas uma vez por carregamento
+                        let num_f = self.formatar_elevado(&num);
+
+                        Ok(Versiculo {
+                            numero: num,
+                            numero_formatado: num_f,
+                            texto: texto,
+                        })
                     })
                     .unwrap();
 
@@ -146,6 +164,29 @@ impl BibliaApp {
             }
         }
     }
+
+    // fn carregar_capitulo(&mut self) {
+    //     let path = crate::db::get_db_path();
+
+    //     match Connection::open(&path) {
+    //         Ok(conn) => {
+    //             let mut stmt = conn
+    //                 .prepare("SELECT verse, text FROM verses WHERE book = ?1 AND chapter = ?2")
+    //                 .unwrap();
+
+    //             let iter = stmt
+    //                 .query_map([self.livro_selecionado, self.capitulo], |row| {
+    //                     Ok((row.get(0)?, row.get(1)?))
+    //                 })
+    //                 .unwrap();
+
+    //             self.versiculos = iter.filter_map(|res| res.ok()).collect();
+    //         }
+    //         Err(e) => {
+    //             eprintln!("Erro ao abrir banco em {:?}: {}", path, e);
+    //         }
+    //     }
+    // }
 
     // fn carregar_capitulo(&mut self) {
     //     let path = crate::db::get_db_path();
@@ -201,79 +242,86 @@ impl BibliaApp {
 impl eframe::App for BibliaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 1. MENU LATERAL (DESKTOP)
-        #[cfg(not(target_os = "android"))]
-        egui::Panel::left("menu_livros").show_inside(ui, |ui| {
-            ui.heading("Livros");
-            ui.separator();
+        //#[cfg(not(target_os = "android"))]
+        if self.menu_aberto {
+            egui::Panel::left("menu_livros").show_inside(ui, |ui| {
+                ui.heading("Livros");
+                ui.separator();
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                //  fazer um SELECT na tabela 'books' para preencher isso
-                for livro in &self.lista_livros.clone() {
-                    let is_selected = self.livro_selecionado == livro.id;
-                    if ui.selectable_label(is_selected, &livro.name).clicked() {
-                        self.livro_selecionado = livro.id;
-                        self.nome_livro = livro.name.clone();
-                        self.capitulo = 1;
-                        self.carregar_capitulo();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    //  fazer um SELECT na tabela 'books' para preencher isso
+                    for livro in &self.lista_livros.clone() {
+                        let is_selected = self.livro_selecionado == livro.id;
+                        if ui.selectable_label(is_selected, &livro.name).clicked() {
+                            self.livro_selecionado = livro.id;
+                            self.nome_livro = livro.name.clone();
+                            self.capitulo = 1;
+                            self.carregar_capitulo();
+                        }
                     }
-                }
+                });
             });
-        });
+        }
 
         // 2. MENU INFERIOR (ANDROID)
-        #[cfg(target_os = "android")]
-        egui::Panel::bottom("navegacao_mobile").show_inside(ui, |ui| {
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_label("")
-                    .selected_text(&self.nome_livro)
-                    .show_ui(ui, |ui| {
-                        for livro in &self.lista_livros.clone() {
-                            if ui
-                                .selectable_value(
-                                    &mut self.livro_selecionado,
-                                    livro.id,
-                                    &livro.name,
-                                )
-                                .clicked()
-                            {
-                                self.nome_livro = livro.name.clone();
-                                self.capitulo = 1;
-                                self.carregar_capitulo();
-                            }
-                        }
-                    });
-                if ui
-                    .add_enabled(self.capitulo > 1, egui::Button::new("⬅ Anterior"))
-                    .clicked()
-                {
-                    self.livro_anterior();
-                }
-                let n_capitulos = self.total_capitulos_do_livro(self.livro_selecionado);
+        // #[cfg(target_os = "android")]
+        // egui::Panel::bottom("navegacao_mobile").show_inside(ui, |ui| {
+        //     ui.horizontal(|ui| {
+        //         egui::ComboBox::from_label("")
+        //             .selected_text(&self.nome_livro)
+        //             .show_ui(ui, |ui| {
+        //                 for livro in &self.lista_livros.clone() {
+        //                     if ui
+        //                         .selectable_value(
+        //                             &mut self.livro_selecionado,
+        //                             livro.id,
+        //                             &livro.name,
+        //                         )
+        //                         .clicked()
+        //                     {
+        //                         self.nome_livro = livro.name.clone();
+        //                         self.capitulo = 1;
+        //                         self.carregar_capitulo();
+        //                     }
+        //                 }
+        //             });
+        //         if ui
+        //             .add_enabled(self.capitulo > 1, egui::Button::new("⬅ Anterior"))
+        //             .clicked()
+        //         {
+        //             self.livro_anterior();
+        //         }
+        //         let n_capitulos = self.total_capitulos_do_livro(self.livro_selecionado);
 
-                if ui
-                    .add_enabled(self.capitulo < n_capitulos, egui::Button::new("Próximo ➡"))
-                    .clicked()
-                {
-                    self.proximo_livro();
-                }
-            });
-        });
+        //         if ui
+        //             .add_enabled(self.capitulo < n_capitulos, egui::Button::new("Próximo ➡"))
+        //             .clicked()
+        //         {
+        //             self.proximo_livro();
+        //         }
+        //     });
+        // });
 
-        let mut margin = egui::Margin::same(0);
+        let mut top_frame = egui::Frame::NONE
+            .fill(ui.visuals().window_fill())
+            .inner_margin(egui::Margin::same(16));
+
+        let mut margin = top_frame.inner_margin;
 
         #[cfg(target_os = "android")]
         {
-            // Geralmente 24.0 a 30.0 pontos são suficientes para pular a barra de status
             margin.top = 30;
-            margin.bottom = 10; // Evita a barra de gestos do Android
+            margin.bottom = 10;
         }
 
+        top_frame.inner_margin = margin;
+
         egui::Panel::top("header")
-            .frame(egui::Frame::NONE.inner_margin(margin))
+            .frame(top_frame)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button(egui::RichText::new("☰").size(20.0)).clicked() {
-                        //self.menu_aberto = !self.menu_aberto;
+                        self.menu_aberto = !self.menu_aberto;
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -282,7 +330,7 @@ impl eframe::App for BibliaApp {
                         }
 
                         ui.centered_and_justified(|ui| {
-                            ui.heading("Bíblia Egui");
+                            ui.heading("Bíblia Sagrada");
                         });
                     });
                 });
@@ -362,9 +410,8 @@ impl eframe::App for BibliaApp {
                     total_versiculos,
                     |ui, _range| {
                         // 'range' contém apenas os índices visíveis, ex: 100..115
-                        for (num, texto) in &self.versiculos {
-                            let num_f = self.formatar_elevado(num);
-                            ui.label(format!("{num_f} {texto}"));
+                        for v in &self.versiculos {
+                            ui.label(format!("{} {}", v.numero_formatado, v.texto));
                         }
                     },
                 );
