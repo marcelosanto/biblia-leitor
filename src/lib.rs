@@ -229,7 +229,10 @@ impl BibliaApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
-                            // self.tela_atual = Tela::Busca; // Troca para a tela de pesquisa
+                            self.tela_atual = Tela::Busca;
+                        }
+                        if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
+                            self.tela_atual = Tela::Configuracoes;
                         }
 
                         ui.centered_and_justified(|ui| {
@@ -238,6 +241,28 @@ impl BibliaApp {
                     });
                 });
             });
+    }
+
+    fn renderizar_menu(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::left("menu_livros").show_inside(ui, |ui| {
+            ui.heading("Livros");
+            ui.separator();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for livro in &self.lista_livros.clone() {
+                    let is_selected = self.livro_selecionado == livro.id;
+                    if ui.selectable_label(is_selected, &livro.name).clicked() {
+                        self.livro_selecionado = livro.id;
+                        self.nome_livro = livro.name.clone();
+                        self.capitulo = 1;
+                        self.carregar_capitulo();
+                        self.capitulo_mudou = true;
+                        self.menu_aberto = false;
+                        self.tela_atual = Tela::Leitura
+                    }
+                }
+            });
+        });
     }
 
     fn ui_leitura(&mut self, ui: &mut egui::Ui) {
@@ -335,27 +360,10 @@ impl eframe::App for BibliaApp {
         self.renderizar_header(ui);
         // ui.ctx().set_debug_on_hover(true); // -> Pra debugar layout
 
-        // 1. MENU LATERAL (DESKTOP)
+        // 1. MENU LATERAL (DESKTOP & Android)
         //#[cfg(not(target_os = "android"))]
         if self.menu_aberto {
-            egui::Panel::left("menu_livros").show_inside(ui, |ui| {
-                ui.heading("Livros");
-                ui.separator();
-
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for livro in &self.lista_livros.clone() {
-                        let is_selected = self.livro_selecionado == livro.id;
-                        if ui.selectable_label(is_selected, &livro.name).clicked() {
-                            self.livro_selecionado = livro.id;
-                            self.nome_livro = livro.name.clone();
-                            self.capitulo = 1;
-                            self.carregar_capitulo();
-                            self.capitulo_mudou = true;
-                            self.menu_aberto = false;
-                        }
-                    }
-                });
-            });
+            self.renderizar_menu(ui);
         }
 
         // 2. MENU INFERIOR (ANDROID)
@@ -409,16 +417,6 @@ impl eframe::App for BibliaApp {
                     Tela::Busca => self.ui_busca(ui),
                     Tela::Configuracoes => self.ui_config(ui),
                     // _ => ui.label("Nenhuma?"),
-                }
-
-                if ui.button("Trocar para Leitura").clicked() {
-                    self.tela_atual = Tela::Leitura;
-                }
-                if ui.button("Trocar para Busca").clicked() {
-                    self.tela_atual = Tela::Busca;
-                }
-                if ui.button("Trocar para Configuracoes").clicked() {
-                    self.tela_atual = Tela::Configuracoes;
                 }
             });
     }
