@@ -1,4 +1,7 @@
-use eframe::egui::{self, RichText, Visuals};
+use eframe::{
+    App,
+    egui::{self, RichText, Visuals},
+};
 use rusqlite::{Connection, Result};
 
 mod db;
@@ -49,12 +52,14 @@ pub struct Versiculo {
 }
 
 pub struct BibliaApp {
+    tela_atual: Tela,
     livro_selecionado: i32,
     nome_livro: String,
     lista_livros: Vec<Livro>,
     capitulo: i32,
     versiculos: Vec<Versiculo>,
     menu_aberto: bool,
+    capitulo_mudou: bool,
 }
 
 impl BibliaApp {
@@ -62,12 +67,14 @@ impl BibliaApp {
         Self::configura_context(&cc.egui_ctx);
 
         let mut app = Self {
+            tela_atual: Tela::Leitura,
             livro_selecionado: 1,
             nome_livro: "Gênesis".to_string(),
             lista_livros: Vec::new(),
             capitulo: 1,
             versiculos: Vec::new(),
             menu_aberto: false,
+            capitulo_mudou: false,
         };
 
         app.carregar_lista_livros();
@@ -165,47 +172,6 @@ impl BibliaApp {
         }
     }
 
-    // fn carregar_capitulo(&mut self) {
-    //     let path = crate::db::get_db_path();
-
-    //     match Connection::open(&path) {
-    //         Ok(conn) => {
-    //             let mut stmt = conn
-    //                 .prepare("SELECT verse, text FROM verses WHERE book = ?1 AND chapter = ?2")
-    //                 .unwrap();
-
-    //             let iter = stmt
-    //                 .query_map([self.livro_selecionado, self.capitulo], |row| {
-    //                     Ok((row.get(0)?, row.get(1)?))
-    //                 })
-    //                 .unwrap();
-
-    //             self.versiculos = iter.filter_map(|res| res.ok()).collect();
-    //         }
-    //         Err(e) => {
-    //             eprintln!("Erro ao abrir banco em {:?}: {}", path, e);
-    //         }
-    //     }
-    // }
-
-    // fn carregar_capitulo(&mut self) {
-    //     let path = crate::db::get_db_path();
-
-    //     if let Ok(conn) = rusqlite::Connection::open(path) {
-    //         let mut stmt = conn
-    //             .prepare("SELECT verse, text FROM verses WHERE book = ?1 AND chapter = ?2")
-    //             .unwrap();
-
-    //         let iter = stmt
-    //             .query_map([self.livro_selecionado, self.capitulo], |row| {
-    //                 Ok((row.get(0)?, row.get(1)?))
-    //             })
-    //             .unwrap();
-
-    //         self.versiculos = iter.filter_map(|res| res.ok()).collect();
-    //     }
-    // }
-    //
     fn livro_anterior(&mut self) {
         if self.capitulo > 1 {
             self.capitulo -= 1;
@@ -237,10 +203,138 @@ impl BibliaApp {
             })
             .collect()
     }
+
+    fn renderizar_header(&mut self, ui: &mut egui::Ui) {
+        let mut top_frame = egui::Frame::NONE
+            .fill(ui.visuals().window_fill())
+            .inner_margin(egui::Margin::same(16));
+
+        let mut margin = top_frame.inner_margin;
+
+        #[cfg(target_os = "android")]
+        {
+            margin.top = 30;
+            margin.bottom = 10;
+        }
+
+        top_frame.inner_margin = margin;
+
+        egui::Panel::top("header")
+            .frame(top_frame)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button(egui::RichText::new("☰").size(20.0)).clicked() {
+                        self.menu_aberto = !self.menu_aberto;
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
+                            // self.tela_atual = Tela::Busca; // Troca para a tela de pesquisa
+                        }
+
+                        ui.centered_and_justified(|ui| {
+                            ui.heading("Bíblia Sagrada");
+                        });
+                    });
+                });
+            });
+    }
+
+    fn ui_leitura(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.horizontal(|ui| {
+                // Isso centraliza o grupo horizontal dentro da largura disponível
+                let total_width = ui.available_width();
+
+                // Estimativa de largura do conjunto
+                let group_width = 220.0;
+                ui.add_space((total_width - group_width) / 2.0);
+
+                // --- Botão Esquerdo (Seta minimalista) ---
+                let btn_prev = egui::Button::new(
+                    egui::RichText::new("<")
+                        .size(24.0)
+                        .color(egui::Color32::from_rgb(138, 154, 91)),
+                )
+                .frame(false);
+                if ui.add_enabled(self.capitulo > 1, btn_prev).clicked() {
+                    self.livro_anterior();
+                    self.capitulo_mudou = true;
+                }
+
+                ui.add_space(20.0); // Espaço entre seta e texto
+
+                // --- Título: Nome (Preto) e Capítulo (Cinza) ---
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(&self.nome_livro)
+                            .heading()
+                            .strong()
+                            .color(ui.visuals().widgets.active.fg_stroke.color),
+                    ); // Cor principal
+
+                    ui.add_space(8.0);
+
+                    ui.label(
+                        egui::RichText::new(self.capitulo.to_string())
+                            .heading()
+                            .color(egui::Color32::from_gray(140)),
+                    ); // Cor cinza da imagem
+                });
+
+                ui.add_space(20.0);
+
+                // --- Botão Direito ---
+                let n_cap = self.total_capitulos_do_livro(self.livro_selecionado);
+                let btn_next = egui::Button::new(
+                    egui::RichText::new(">")
+                        .size(24.0)
+                        .color(egui::Color32::from_rgb(138, 154, 91)),
+                )
+                .frame(false);
+                if ui.add_enabled(self.capitulo < n_cap, btn_next).clicked() {
+                    self.proximo_livro();
+                    self.capitulo_mudou = true;
+                }
+            });
+        });
+
+        ui.separator();
+
+        let altura_do_texto = 24.0; // Estimativa da altura de cada linha
+        let total_versiculos = self.versiculos.len();
+
+        let mut scroll_area = egui::ScrollArea::vertical();
+
+        // Reseta o scroll se o capítulo mudou
+        if self.capitulo_mudou {
+            scroll_area = scroll_area.scroll_offset(egui::Vec2::ZERO);
+            self.capitulo_mudou = false;
+        }
+
+        scroll_area.show_rows(ui, altura_do_texto, total_versiculos, |ui, range| {
+            for v in &self.versiculos[range] {
+                ui.label(format!("{}{}", v.numero_formatado, v.texto));
+            }
+        });
+    }
+
+    fn ui_busca(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Pesquisar na Bíblia");
+        // aqui vai sua barra de pesquisa...
+    }
+
+    fn ui_config(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Tela de Configurações");
+        // aqui vai sua barra de pesquisa...
+    }
 }
 
 impl eframe::App for BibliaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.renderizar_header(ui);
+        // ui.ctx().set_debug_on_hover(true); // -> Pra debugar layout
+
         // 1. MENU LATERAL (DESKTOP)
         //#[cfg(not(target_os = "android"))]
         if self.menu_aberto {
@@ -249,7 +343,6 @@ impl eframe::App for BibliaApp {
                 ui.separator();
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    //  fazer um SELECT na tabela 'books' para preencher isso
                     for livro in &self.lista_livros.clone() {
                         let is_selected = self.livro_selecionado == livro.id;
                         if ui.selectable_label(is_selected, &livro.name).clicked() {
@@ -257,6 +350,8 @@ impl eframe::App for BibliaApp {
                             self.nome_livro = livro.name.clone();
                             self.capitulo = 1;
                             self.carregar_capitulo();
+                            self.capitulo_mudou = true;
+                            self.menu_aberto = false;
                         }
                     }
                 });
@@ -302,40 +397,6 @@ impl eframe::App for BibliaApp {
         //     });
         // });
 
-        let mut top_frame = egui::Frame::NONE
-            .fill(ui.visuals().window_fill())
-            .inner_margin(egui::Margin::same(16));
-
-        let mut margin = top_frame.inner_margin;
-
-        #[cfg(target_os = "android")]
-        {
-            margin.top = 30;
-            margin.bottom = 10;
-        }
-
-        top_frame.inner_margin = margin;
-
-        egui::Panel::top("header")
-            .frame(top_frame)
-            .show_inside(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("☰").size(20.0)).clicked() {
-                        self.menu_aberto = !self.menu_aberto;
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
-                            // self.tela_atual = Tela::Busca; // Troca para a tela de pesquisa
-                        }
-
-                        ui.centered_and_justified(|ui| {
-                            ui.heading("Bíblia Sagrada");
-                        });
-                    });
-                });
-            });
-
         let mut frame = egui::Frame::central_panel(&ui.ctx().global_style());
         frame.inner_margin.top = 40;
 
@@ -343,93 +404,22 @@ impl eframe::App for BibliaApp {
         egui::CentralPanel::default()
             .frame(frame)
             .show_inside(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.horizontal(|ui| {
-                        // Isso centraliza o grupo horizontal dentro da largura disponível
-                        let total_width = ui.available_width();
+                match self.tela_atual {
+                    Tela::Leitura => self.ui_leitura(ui),
+                    Tela::Busca => self.ui_busca(ui),
+                    Tela::Configuracoes => self.ui_config(ui),
+                    // _ => ui.label("Nenhuma?"),
+                }
 
-                        // Estimativa de largura do conjunto (ajuste conforme necessário)
-                        let group_width = 220.0;
-                        ui.add_space((total_width - group_width) / 2.0);
-
-                        // --- Botão Esquerdo (Seta minimalista) ---
-                        let btn_prev = egui::Button::new(
-                            egui::RichText::new("<")
-                                .size(24.0)
-                                .color(egui::Color32::from_rgb(138, 154, 91)),
-                        )
-                        .frame(false);
-                        if ui.add_enabled(self.capitulo > 1, btn_prev).clicked() {
-                            self.livro_anterior();
-                        }
-
-                        ui.add_space(20.0); // Espaço entre seta e texto
-
-                        // --- Título: Nome (Preto) e Capítulo (Cinza) ---
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(&self.nome_livro)
-                                    .heading()
-                                    .strong()
-                                    .color(ui.visuals().widgets.active.fg_stroke.color),
-                            ); // Cor principal
-
-                            ui.add_space(8.0);
-
-                            ui.label(
-                                egui::RichText::new(self.capitulo.to_string())
-                                    .heading()
-                                    .color(egui::Color32::from_gray(140)),
-                            ); // Cor cinza da imagem
-                        });
-
-                        ui.add_space(20.0); // Espaço entre texto e seta
-
-                        // --- Botão Direito (Seta minimalista) ---
-                        let n_cap = self.total_capitulos_do_livro(self.livro_selecionado);
-                        let btn_next = egui::Button::new(
-                            egui::RichText::new(">")
-                                .size(24.0)
-                                .color(egui::Color32::from_rgb(138, 154, 91)),
-                        )
-                        .frame(false);
-                        if ui.add_enabled(self.capitulo < n_cap, btn_next).clicked() {
-                            self.proximo_livro();
-                        }
-                    });
-                });
-
-                ui.separator();
-
-                let altura_do_texto = ui.text_style_height(&egui::TextStyle::Body);
-                let total_versiculos = self.versiculos.len();
-
-                egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    altura_do_texto,
-                    total_versiculos,
-                    |ui, _range| {
-                        // 'range' contém apenas os índices visíveis, ex: 100..115
-                        for v in &self.versiculos {
-                            ui.label(format!("{} {}", v.numero_formatado, v.texto));
-                        }
-                    },
-                );
-
-                //     egui::ScrollArea::vertical().show(ui, |ui| {
-                //         for (num, texto) in &self.versiculos {
-                //             ui.horizontal_top(|ui| {
-                //                 // Estiliza o número do versículo
-                //                 ui.label(
-                //                     egui::RichText::new(num.to_string())
-                //                         .small()
-                //                         .color(egui::Color32::GRAY),
-                //                 );
-                //                 ui.label(texto);
-                //             });
-                //             ui.add_space(8.0); // Espaçamento entre versículos
-                //         }
-                //     });
+                if ui.button("Trocar para Leitura").clicked() {
+                    self.tela_atual = Tela::Leitura;
+                }
+                if ui.button("Trocar para Busca").clicked() {
+                    self.tela_atual = Tela::Busca;
+                }
+                if ui.button("Trocar para Configuracoes").clicked() {
+                    self.tela_atual = Tela::Configuracoes;
+                }
             });
     }
 }
