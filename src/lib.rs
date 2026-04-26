@@ -60,6 +60,8 @@ pub struct BibliaApp {
     versiculos: Vec<Versiculo>,
     menu_aberto: bool,
     capitulo_mudou: bool,
+    aguardando_saida: bool,
+    historico: Vec<Tela>,
 }
 
 impl BibliaApp {
@@ -75,6 +77,8 @@ impl BibliaApp {
             versiculos: Vec::new(),
             menu_aberto: false,
             capitulo_mudou: false,
+            aguardando_saida: false,
+            historico: Vec::new(),
         };
 
         app.carregar_lista_livros();
@@ -204,6 +208,19 @@ impl BibliaApp {
             .collect()
     }
 
+    fn navegar_para(&mut self, nova_tela: Tela) {
+        if self.tela_atual != nova_tela {
+            let antiga = std::mem::replace(&mut self.tela_atual, nova_tela);
+            self.historico.push(antiga);
+        }
+    }
+
+    fn voltar(&mut self) {
+        if let Some(tela_anterior) = self.historico.pop() {
+            self.tela_atual = tela_anterior;
+        }
+    }
+
     fn renderizar_header(&mut self, ui: &mut egui::Ui) {
         let mut top_frame = egui::Frame::NONE
             .fill(ui.visuals().window_fill())
@@ -229,10 +246,10 @@ impl BibliaApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
-                            self.tela_atual = Tela::Busca;
+                            self.navegar_para(Tela::Busca);
                         }
                         if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
-                            self.tela_atual = Tela::Configuracoes;
+                            self.navegar_para(Tela::Configuracoes);
                         }
 
                         ui.centered_and_justified(|ui| {
@@ -258,7 +275,7 @@ impl BibliaApp {
                         self.carregar_capitulo();
                         self.capitulo_mudou = true;
                         self.menu_aberto = false;
-                        self.tela_atual = Tela::Leitura
+                        self.navegar_para(Tela::Leitura);
                     }
                 }
             });
@@ -346,12 +363,16 @@ impl BibliaApp {
 
     fn ui_busca(&mut self, ui: &mut egui::Ui) {
         ui.heading("Pesquisar na Bíblia");
-        // aqui vai sua barra de pesquisa...
+        if ui.button("Tela leitura").clicked() {
+            self.navegar_para(Tela::Leitura);
+        }
     }
 
     fn ui_config(&mut self, ui: &mut egui::Ui) {
         ui.heading("Tela de Configurações");
-        // aqui vai sua barra de pesquisa...
+        if ui.button("Tela leitura").clicked() {
+            self.navegar_para(Tela::Leitura);
+        }
     }
 }
 
@@ -364,6 +385,27 @@ impl eframe::App for BibliaApp {
         //#[cfg(not(target_os = "android"))]
         if self.menu_aberto {
             self.renderizar_menu(ui);
+        }
+
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            println!("Botão Voltar/ESC pressionado!");
+            println!("Menu aberto: {}", self.menu_aberto);
+            println!("Itens no histórico: {}", self.historico.len());
+
+            if self.menu_aberto {
+                self.menu_aberto = false;
+            } else if !self.historico.is_empty() {
+                self.voltar();
+            } else {
+                // Estamos na tela inicial. Se clicar de novo, fecha.
+                if self.aguardando_saida {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                } else {
+                    self.aguardando_saida = true;
+                    // Aqui você poderia mostrar uma pequena mensagem (Toast)
+                    println!("Pressione voltar novamente para sair");
+                }
+            }
         }
 
         // 2. MENU INFERIOR (ANDROID)
