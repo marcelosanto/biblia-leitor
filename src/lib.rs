@@ -46,9 +46,12 @@ pub struct Livro {
 }
 
 pub struct Versiculo {
+    pub id: i32,
     pub numero: i32,
     pub numero_formatado: String,
     pub texto: String,
+    pub cor_hex: Option<String>,
+    pub favorito: bool,
 }
 
 pub struct BibliaApp {
@@ -81,10 +84,36 @@ impl BibliaApp {
             historico: Vec::new(),
         };
 
+        app.inicializar_banco();
         app.carregar_lista_livros();
         app.carregar_capitulo();
 
         app
+    }
+
+    pub fn inicializar_banco(&mut self) {
+        let path = crate::db::get_db_path();
+        if let Ok(conn) = Connection::open(path) {
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS marcacoes (
+                    book INTEGER,
+                    chapter INTEGER,
+                    verse INTEGER,
+                    cor TEXT,
+                    favorito INTEGER DEFAULT 0,
+                    PRIMARY KEY (book, chapter, verse)
+                )",
+                [],
+            )
+            .ok();
+
+            // Dica: Adicione um índice para buscas rápidas por cor/favorito no futuro
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_favoritos ON marcacoes(favorito)",
+                [],
+            )
+            .ok();
+        }
     }
 
     fn configura_context(ctx: &egui::Context) {
