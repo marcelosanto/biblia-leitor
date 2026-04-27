@@ -65,6 +65,17 @@ pub struct BibliaApp {
     aguardando_saida: bool,
     historico: Vec<Tela>,
     selecionado: Option<i32>,
+    termo_busca: String,
+    resultados: Vec<ResultadoBusca>,
+    pular_para_versiculo: Option<i32>,
+}
+
+pub struct ResultadoBusca {
+    pub livro_nome: String,
+    pub livro_id: i32,
+    pub capitulo: i32,
+    pub numero: i32,
+    pub texto: String,
 }
 
 impl BibliaApp {
@@ -83,6 +94,9 @@ impl BibliaApp {
             aguardando_saida: false,
             historico: Vec::new(),
             selecionado: None,
+            termo_busca: String::new(),
+            resultados: Vec::new(),
+            pular_para_versiculo: None,
         };
 
         app.inicializar_banco();
@@ -205,6 +219,43 @@ impl BibliaApp {
             Err(e) => {
                 eprintln!("Erro ao abrir banco em {:?}: {}", path, e);
             }
+        }
+    }
+
+    fn executar_busca(&mut self) {
+        let termo_limpo = normalizar(&self.termo_busca);
+        if termo_limpo.is_empty() {
+            return;
+        }
+
+        let path = crate::db::get_db_path();
+        if let Ok(conn) = Connection::open(path) {
+            // Buscamos de forma ampla no SQL (ou até o livro todo)
+            let mut stmt = conn
+                .prepare(
+                    "SELECT b.name, v.book, v.chapter, v.verse, v.text
+                 FROM verses v JOIN books b ON v.book = b.id",
+                )
+                .unwrap();
+
+            let iter = stmt
+                .query_map([], |row| {
+                    Ok(ResultadoBusca {
+                        livro_nome: row.get(0)?,
+                        livro_id: row.get(1)?,
+                        capitulo: row.get(2)?,
+                        numero: row.get(3)?,
+                        texto: row.get(4)?,
+                    })
+                })
+                .unwrap();
+
+            // A MÁGICA: Filtramos aqui no Rust comparando os textos normalizados
+            self.resultados = iter
+                .filter_map(|res| res.ok())
+                .filter(|res| normalizar(&res.texto).contains(&termo_limpo))
+                .take(100) // Limita para não travar a UI
+                .collect();
         }
     }
 
@@ -418,34 +469,42 @@ impl BibliaApp {
             // for v in &self.versiculos[range] {
             //     ui.label(format!("{}{}", v.numero_formatado, v.texto));
             // }
-            let mut acao_para_salvar = None; // Guardará (numero_versiculo, cor, favorito)
+            let mut acao_para_salvar = None;
             let mut acao_para_limpar = None;
+            let mut novo_selecionado = self.selecionado;
 
             for v in &self.versiculos {
                 let mut texto_rt =
                     egui::RichText::new(format!("{} {}", v.numero_formatado, v.texto));
 
-                // Se tiver cor no banco, pinta o fundo
                 if let Some(hex) = &v.cor_hex {
                     texto_rt = texto_rt.background_color(hex_para_color32(hex));
                 }
 
-                // Se for favorito, coloca uma estrela ou muda a cor da fonte
                 if v.favorito {
                     texto_rt = texto_rt.color(egui::Color32::GOLD).strong();
                 }
 
                 let is_selected = self.selecionado == Some(v.numero);
+
+                // RENDERIZA O VERSÍCULO
                 let resp = ui.selectable_label(is_selected, texto_rt);
 
-                if resp.clicked() {
-                    self.selecionado = Some(v.numero);
+                // LÓGICA DE SCROLL: Se viemos da busca, pula para cá
+                if self.pular_para_versiculo == Some(v.numero) {
+                    resp.scroll_to_me(Some(egui::Align::TOP));
+                    novo_selecionado = Some(v.numero); // Destaca ele
+                    self.pular_para_versiculo = None; // Limpa a flag
                 }
 
+                if resp.clicked() {
+                    novo_selecionado = if is_selected { None } else { Some(v.numero) };
+                }
+
+                // MENU DE CORES
                 if is_selected {
                     ui.horizontal(|ui| {
                         if ui.button("🟡 Amarelo").clicked() {
-                            // Em vez de chamar a função direto, guardamos a intenção
                             acao_para_salvar = Some((v.numero, Some("#FFFF00"), None));
                         }
                         if ui.button("⭐ Favorito").clicked() {
@@ -458,10 +517,12 @@ impl BibliaApp {
                 }
             }
 
+            // APLICA AS MUDANÇAS (Fora do loop para evitar erro de borrow)
+            self.selecionado = novo_selecionado;
+
             if let Some((num, cor, fav)) = acao_para_salvar {
                 self.salvar_marcacao(num, cor, fav);
             }
-
             if let Some(num) = acao_para_limpar {
                 self.limpar_marcacao(num);
             }
@@ -469,10 +530,53 @@ impl BibliaApp {
     }
 
     fn ui_busca(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Pesquisar na Bíblia");
-        if ui.button("Tela leitura").clicked() {
-            self.navegar_para(Tela::Leitura);
-        }
+        ui.vertical(|ui| {
+            ui.heading("Pesquisar na Bíblia");
+
+            ui.horizontal(|ui| {
+                let edit = ui.text_edit_singleline(&mut self.termo_busca);
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    || ui.button("🔍").clicked()
+                {
+                    self.executar_busca();
+                }
+            });
+
+            ui.separator();
+
+            let mut destino_clique = None;
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if self.resultados.is_empty() {
+                    ui.label("Nenhum resultado encontrado.");
+                }
+
+                for res in &self.resultados {
+                    ui.group(|ui| {
+                        ui.vertical(|ui| {
+                            // Título do resultado: "Gênesis 1:1"
+                            let titulo =
+                                format!("{} {}:{}", res.livro_nome, res.capitulo, res.numero);
+
+                            if ui.link(titulo).clicked() {
+                                destino_clique = Some((res.livro_id, res.capitulo, res.numero));
+                            }
+
+                            ui.label(&res.texto);
+                        });
+                    });
+                    ui.add_space(8.0);
+                }
+
+                if let Some((livro_id, cap_num, versiculo_num)) = destino_clique {
+                    self.livro_selecionado = livro_id;
+                    self.capitulo = cap_num;
+                    self.pular_para_versiculo = Some(versiculo_num);
+                    self.carregar_capitulo();
+                    self.navegar_para(Tela::Leitura);
+                }
+            });
+        });
     }
 
     fn ui_config(&mut self, ui: &mut egui::Ui) {
@@ -596,4 +700,13 @@ fn hex_para_color32(hex: &str) -> egui::Color32 {
     } else {
         egui::Color32::from_rgb(255, 255, 0)
     }
+}
+
+fn normalizar(texto: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    texto
+        .nfd()
+        .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .to_lowercase()
 }
