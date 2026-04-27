@@ -46,7 +46,6 @@ pub struct Livro {
 }
 
 pub struct Versiculo {
-    pub id: i32,
     pub numero: i32,
     pub numero_formatado: String,
     pub texto: String,
@@ -65,6 +64,7 @@ pub struct BibliaApp {
     capitulo_mudou: bool,
     aguardando_saida: bool,
     historico: Vec<Tela>,
+    selecionado: Option<i32>,
 }
 
 impl BibliaApp {
@@ -82,6 +82,7 @@ impl BibliaApp {
             capitulo_mudou: false,
             aguardando_saida: false,
             historico: Vec::new(),
+            selecionado: None,
         };
 
         app.inicializar_banco();
@@ -178,21 +179,23 @@ impl BibliaApp {
         match Connection::open(&path) {
             Ok(conn) => {
                 let mut stmt = conn
-                    .prepare("SELECT verse, text FROM verses WHERE book = ?1 AND chapter = ?2")
+                    .prepare("SELECT v.verse, v.text, m.cor, m.favorito
+                                 FROM verses v
+                                 LEFT JOIN marcacoes m ON v.book = m.book AND v.chapter = m.chapter AND v.verse = m.verse
+                                 WHERE v.book = ?1 AND v.chapter = ?2")
                     .unwrap();
 
                 let iter = stmt
                     .query_map([self.livro_selecionado, self.capitulo], |row| {
                         let num: i32 = row.get(0)?;
-                        let texto: String = row.get(1)?;
-
-                        // Converte aqui, apenas uma vez por carregamento
-                        let num_f = self.formatar_elevado(&num);
+                        let fav_int: Option<i32> = row.get(3)?;
 
                         Ok(Versiculo {
                             numero: num,
-                            numero_formatado: num_f,
-                            texto: texto,
+                            numero_formatado: self.formatar_elevado(&num),
+                            texto: row.get(1)?,
+                            cor_hex: row.get(2).ok(), // Se for NULL, vira None
+                            favorito: fav_int.unwrap_or(0) == 1,
                         })
                     })
                     .unwrap();
@@ -242,6 +245,34 @@ impl BibliaApp {
             let antiga = std::mem::replace(&mut self.tela_atual, nova_tela);
             self.historico.push(antiga);
         }
+    }
+
+    fn salvar_marcacao(&mut self, num_v: i32, cor: Option<&str>, fav: Option<bool>) {
+        let path = crate::db::get_db_path();
+        if let Ok(conn) = Connection::open(path) {
+            // Usamos INSERT OR IGNORE para garantir que a linha exista
+            conn.execute(
+                "INSERT OR IGNORE INTO marcacoes (book, chapter, verse, favorito) VALUES (?1, ?2, ?3, 0)",
+                rusqlite::params![self.livro_selecionado, self.capitulo, num_v],
+            ).ok();
+
+            if let Some(c) = cor {
+                conn.execute(
+                    "UPDATE marcacoes SET cor = ?1 WHERE book = ?2 AND chapter = ?3 AND verse = ?4",
+                    rusqlite::params![c, self.livro_selecionado, self.capitulo, num_v],
+                )
+                .ok();
+            }
+
+            if let Some(f) = fav {
+                let val = if f { 1 } else { 0 };
+                conn.execute(
+                    "UPDATE marcacoes SET favorito = ?1 WHERE book = ?2 AND chapter = ?3 AND verse = ?4",
+                    rusqlite::params![val, self.livro_selecionado, self.capitulo, num_v],
+                ).ok();
+            }
+        }
+        self.carregar_capitulo(); // Recarrega a UI
     }
 
     fn voltar(&mut self) {
@@ -384,8 +415,55 @@ impl BibliaApp {
         }
 
         scroll_area.show_rows(ui, altura_do_texto, total_versiculos, |ui, range| {
-            for v in &self.versiculos[range] {
-                ui.label(format!("{}{}", v.numero_formatado, v.texto));
+            // for v in &self.versiculos[range] {
+            //     ui.label(format!("{}{}", v.numero_formatado, v.texto));
+            // }
+            let mut acao_para_salvar = None; // Guardará (numero_versiculo, cor, favorito)
+            let mut acao_para_limpar = None;
+
+            for v in &self.versiculos {
+                let mut texto_rt =
+                    egui::RichText::new(format!("{} {}", v.numero_formatado, v.texto));
+
+                // Se tiver cor no banco, pinta o fundo
+                if let Some(hex) = &v.cor_hex {
+                    texto_rt = texto_rt.background_color(hex_para_color32(hex));
+                }
+
+                // Se for favorito, coloca uma estrela ou muda a cor da fonte
+                if v.favorito {
+                    texto_rt = texto_rt.color(egui::Color32::GOLD).strong();
+                }
+
+                let is_selected = self.selecionado == Some(v.numero);
+                let resp = ui.selectable_label(is_selected, texto_rt);
+
+                if resp.clicked() {
+                    self.selecionado = Some(v.numero);
+                }
+
+                if is_selected {
+                    ui.horizontal(|ui| {
+                        if ui.button("🟡 Amarelo").clicked() {
+                            // Em vez de chamar a função direto, guardamos a intenção
+                            acao_para_salvar = Some((v.numero, Some("#FFFF00"), None));
+                        }
+                        if ui.button("⭐ Favorito").clicked() {
+                            acao_para_salvar = Some((v.numero, None, Some(true)));
+                        }
+                        if ui.button("🗑️ Limpar").clicked() {
+                            acao_para_limpar = Some(v.numero);
+                        }
+                    });
+                }
+            }
+
+            if let Some((num, cor, fav)) = acao_para_salvar {
+                self.salvar_marcacao(num, cor, fav);
+            }
+
+            if let Some(num) = acao_para_limpar {
+                self.limpar_marcacao(num);
             }
         });
     }
@@ -402,6 +480,22 @@ impl BibliaApp {
         if ui.button("Tela leitura").clicked() {
             self.navegar_para(Tela::Leitura);
         }
+    }
+
+    fn limpar_marcacao(&mut self, num_v: i32) {
+        let path = crate::db::get_db_path();
+        if let Ok(conn) = rusqlite::Connection::open(path) {
+            // Remove a linha da tabela de marcações
+            conn.execute(
+                "DELETE FROM marcacoes WHERE book = ?1 AND chapter = ?2 AND verse = ?3",
+                rusqlite::params![self.livro_selecionado, self.capitulo, num_v],
+            )
+            .ok();
+        }
+
+        // Atualiza a lista da memória e limpa a seleção da tela
+        self.selecionado = None;
+        self.carregar_capitulo();
     }
 }
 
@@ -426,12 +520,10 @@ impl eframe::App for BibliaApp {
             } else if !self.historico.is_empty() {
                 self.voltar();
             } else {
-                // Estamos na tela inicial. Se clicar de novo, fecha.
                 if self.aguardando_saida {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
                     self.aguardando_saida = true;
-                    // Aqui você poderia mostrar uma pequena mensagem (Toast)
                     println!("Pressione voltar novamente para sair");
                 }
             }
@@ -490,5 +582,18 @@ impl eframe::App for BibliaApp {
                     // _ => ui.label("Nenhuma?"),
                 }
             });
+    }
+}
+
+fn hex_para_color32(hex: &str) -> egui::Color32 {
+    let hex = hex.trim_start_matches('#');
+
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255);
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
+        egui::Color32::from_rgb(r, g, b)
+    } else {
+        egui::Color32::from_rgb(255, 255, 0)
     }
 }
