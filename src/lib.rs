@@ -1,6 +1,6 @@
 use eframe::{
     App,
-    egui::{self, RichText, Visuals},
+    egui::{self, FontId, RichText, TextStyle, Visuals},
 };
 use rusqlite::{Connection, Result};
 
@@ -146,7 +146,23 @@ impl BibliaApp {
             .get_mut(&egui::TextStyle::Button)
             .unwrap()
             .size = 16.0;
+        #[cfg(target_os = "android")]
+        {
+            style.spacing.item_spacing = egui::vec2(12.0, 12.0);
+            style.spacing.button_padding = egui::vec2(10.0, 8.0);
 
+            style.text_styles.insert(
+                TextStyle::Body,
+                FontId::new(18.0, egui::FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                TextStyle::Heading,
+                FontId::new(24.0, egui::FontFamily::Proportional),
+            );
+
+            style.visuals.window_corner_radius = 12.0.into();
+            style.visuals.widgets.noninteractive.corner_radius = 8.0.into();
+        }
         ctx.set_global_style(style);
     }
 
@@ -223,7 +239,7 @@ impl BibliaApp {
     }
 
     fn executar_busca(&mut self) {
-        let termo_limpo = normalizar(&self.termo_busca);
+        let termo_limpo = normalizar(&self.termo_busca.trim());
         if termo_limpo.is_empty() {
             return;
         }
@@ -234,12 +250,17 @@ impl BibliaApp {
             let mut stmt = conn
                 .prepare(
                     "SELECT b.name, v.book, v.chapter, v.verse, v.text
-                 FROM verses v JOIN books b ON v.book = b.id",
+                                 FROM verses v
+                                 JOIN books b ON v.book = b.id
+                                 WHERE ' ' || LOWER(v.text) || ' ' LIKE ?1
+                                 LIMIT 100",
                 )
                 .unwrap();
 
+            let termo_sql = format!("% {} %", termo_limpo);
+
             let iter = stmt
-                .query_map([], |row| {
+                .query_map([termo_sql], |row| {
                     Ok(ResultadoBusca {
                         livro_nome: row.get(0)?,
                         livro_id: row.get(1)?,
@@ -253,7 +274,12 @@ impl BibliaApp {
             // A MÁGICA: Filtramos aqui no Rust comparando os textos normalizados
             self.resultados = iter
                 .filter_map(|res| res.ok())
-                .filter(|res| normalizar(&res.texto).contains(&termo_limpo))
+                .filter(|res| {
+                    let texto_normalizado = normalizar(&res.texto);
+                    texto_normalizado
+                        .split_whitespace()
+                        .any(|palavra| palavra == termo_limpo)
+                })
                 .take(100) // Limita para não travar a UI
                 .collect();
         }
@@ -551,23 +577,59 @@ impl BibliaApp {
                     ui.label("Nenhum resultado encontrado.");
                 }
 
+                // for res in &self.resultados {
+                //     ui.group(|ui| {
+                //         ui.vertical(|ui| {
+                //             // Título do resultado: "Gênesis 1:1"
+                //             let titulo =
+                //                 format!("{} {}:{}", res.livro_nome, res.capitulo, res.numero);
+
+                //             if ui.link(titulo).clicked() {
+                //                 destino_clique = Some((res.livro_id, res.capitulo, res.numero));
+                //             }
+
+                //             ui.label(&res.texto);
+                //         });
+                //     });
+                //     ui.add_space(8.0);
+                // }
                 for res in &self.resultados {
                     ui.group(|ui| {
                         ui.vertical(|ui| {
-                            // Título do resultado: "Gênesis 1:1"
-                            let titulo =
-                                format!("{} {}:{}", res.livro_nome, res.capitulo, res.numero);
-
-                            if ui.link(titulo).clicked() {
+                            // Título: "Livro 1:1"
+                            if ui
+                                .link(format!(
+                                    "{} {}:{}",
+                                    res.livro_nome, res.capitulo, res.numero
+                                ))
+                                .clicked()
+                            {
                                 destino_clique = Some((res.livro_id, res.capitulo, res.numero));
                             }
 
-                            ui.label(&res.texto);
+                            // Exibe o texto com realce
+                            ui.horizontal_wrapped(|ui| {
+                                let termo_alvo = self.termo_busca.to_lowercase();
+                                for palavra in res.texto.split_whitespace() {
+                                    // Limpa a palavra para comparar (ex: "Davi." vira "davi")
+                                    let palavra_limpa = palavra
+                                        .trim_matches(|c: char| !c.is_alphanumeric())
+                                        .to_lowercase();
+
+                                    if palavra_limpa == termo_alvo {
+                                        ui.label(
+                                            egui::RichText::new(palavra)
+                                                .color(egui::Color32::GOLD)
+                                                .strong(),
+                                        );
+                                    } else {
+                                        ui.label(palavra);
+                                    }
+                                }
+                            });
                         });
                     });
-                    ui.add_space(8.0);
                 }
-
                 if let Some((livro_id, cap_num, versiculo_num)) = destino_clique {
                     self.livro_selecionado = livro_id;
                     self.capitulo = cap_num;
@@ -704,6 +766,7 @@ fn hex_para_color32(hex: &str) -> egui::Color32 {
 
 fn normalizar(texto: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
+
     texto
         .nfd()
         .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
