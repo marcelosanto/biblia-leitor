@@ -1,3 +1,5 @@
+use std::sync::mpsc::channel;
+
 use eframe::{
     App,
     egui::{self, FontId, RichText, TextStyle, Visuals},
@@ -68,6 +70,9 @@ pub struct BibliaApp {
     termo_busca: String,
     resultados: Vec<ResultadoBusca>,
     pular_para_versiculo: Option<i32>,
+    buscando: bool,
+    tx_busca: std::sync::mpsc::Sender<Vec<ResultadoBusca>>,
+    rx_busca: std::sync::mpsc::Receiver<Vec<ResultadoBusca>>,
 }
 
 pub struct ResultadoBusca {
@@ -81,6 +86,8 @@ pub struct ResultadoBusca {
 impl BibliaApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self::configura_context(&cc.egui_ctx);
+
+        let (tx, rx) = channel();
 
         let mut app = Self {
             tela_atual: Tela::Leitura,
@@ -97,6 +104,9 @@ impl BibliaApp {
             termo_busca: String::new(),
             resultados: Vec::new(),
             pular_para_versiculo: None,
+            buscando: false,
+            tx_busca: tx,
+            rx_busca: rx,
         };
 
         app.inicializar_banco();
@@ -108,6 +118,7 @@ impl BibliaApp {
 
     pub fn inicializar_banco(&mut self) {
         let path = crate::db::get_db_path();
+
         if let Ok(conn) = Connection::open(path) {
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS marcacoes (
@@ -128,6 +139,10 @@ impl BibliaApp {
                 [],
             )
             .ok();
+
+            if let Err(e) = crate::db::otimizar_banco_se_necessario(&conn) {
+                eprintln!("Erro na otimização: {}", e);
+            }
         }
     }
 
@@ -238,29 +253,40 @@ impl BibliaApp {
         }
     }
 
-    fn executar_busca(&mut self) {
-        let termo_limpo = normalizar(&self.termo_busca.trim());
-        if termo_limpo.is_empty() {
+    fn executar_busca_async(&mut self) {
+        let termo_original = self.termo_busca.trim().to_string();
+        if termo_original.is_empty() {
             return;
         }
 
-        let path = crate::db::get_db_path();
-        if let Ok(conn) = Connection::open(path) {
-            // Buscamos de forma ampla no SQL (ou até o livro todo)
-            let mut stmt = conn
-                .prepare(
-                    "SELECT b.name, v.book, v.chapter, v.verse, v.text
-                                 FROM verses v
-                                 JOIN books b ON v.book = b.id
-                                 WHERE ' ' || LOWER(v.text) || ' ' LIKE ?1
-                                 LIMIT 100",
-                )
-                .unwrap();
+        // 1. Marcamos que estamos buscando para a UI mostrar o Spinner
+        self.buscando = true;
 
-            let termo_sql = format!("% {} %", termo_limpo);
+        // 2. Clonamos o que a thread vai precisar
+        let tx = self.tx_busca.clone();
+        let termo_limpo = normalizar(&termo_original);
 
-            let iter = stmt
-                .query_map([termo_sql], |row| {
+        // 3. Criamos a thread (A mágica acontece aqui)
+        std::thread::spawn(move || {
+            let path = crate::db::get_db_path();
+            let mut resultados = Vec::new();
+
+            if let Ok(conn) = rusqlite::Connection::open(path) {
+                // USANDO O ÍNDICE: v.texto_busca é MUITO mais rápido que o LIKE '%text%'
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT b.name, v.book, v.chapter, v.verse, v.text
+                     FROM verses v
+                     JOIN books b ON v.book = b.id
+                     WHERE v.texto_busca LIKE ?1
+                     LIMIT 200",
+                    )
+                    .unwrap();
+
+                // Usamos a busca por frase/palavra no SQL
+                let termo_sql = format!("%{}%", termo_limpo);
+
+                if let Ok(iter) = stmt.query_map([termo_sql], |row| {
                     Ok(ResultadoBusca {
                         livro_nome: row.get(0)?,
                         livro_id: row.get(1)?,
@@ -268,21 +294,22 @@ impl BibliaApp {
                         numero: row.get(3)?,
                         texto: row.get(4)?,
                     })
-                })
-                .unwrap();
+                }) {
+                    // Refinamos no Rust para garantir que é a palavra exata (evitar o todavia)
+                    resultados = iter
+                        .filter_map(|res| res.ok())
+                        .filter(|res| {
+                            normalizar(&res.texto)
+                                .split_whitespace()
+                                .any(|p| p == termo_limpo)
+                        })
+                        .collect();
+                }
+            }
 
-            // A MÁGICA: Filtramos aqui no Rust comparando os textos normalizados
-            self.resultados = iter
-                .filter_map(|res| res.ok())
-                .filter(|res| {
-                    let texto_normalizado = normalizar(&res.texto);
-                    texto_normalizado
-                        .split_whitespace()
-                        .any(|palavra| palavra == termo_limpo)
-                })
-                .take(100) // Limita para não travar a UI
-                .collect();
-        }
+            // 4. Enviamos os resultados de volta para o canal (rx_busca vai receber)
+            let _ = tx.send(resultados);
+        });
     }
 
     fn livro_anterior(&mut self) {
@@ -556,15 +583,31 @@ impl BibliaApp {
     }
 
     fn ui_busca(&mut self, ui: &mut egui::Ui) {
+        // 1. CHECAGEM ASSÍNCRONA: Verifica se a thread de busca enviou novos resultados
+        if let Ok(novos_resultados) = self.rx_busca.try_recv() {
+            self.resultados = novos_resultados;
+            self.buscando = false;
+        }
+
         ui.vertical(|ui| {
             ui.heading("Pesquisar na Bíblia");
 
             ui.horizontal(|ui| {
+                // Campo de texto
                 let edit = ui.text_edit_singleline(&mut self.termo_busca);
-                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                    || ui.button("🔍").clicked()
-                {
-                    self.executar_busca();
+
+                // Dispara a busca ao apertar Enter ou clicar na lupa
+                let enter_pressionado =
+                    edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+                if enter_pressionado || ui.button("🔍").clicked() {
+                    // Chamamos a função que dispara a THREAD (não trava a UI)
+                    self.executar_busca_async();
+                }
+
+                // Exibe um spinner (carregamento) enquanto a thread trabalha
+                if self.buscando {
+                    ui.add(egui::Spinner::new().size(16.0));
                 }
             });
 
@@ -572,72 +615,55 @@ impl BibliaApp {
 
             let mut destino_clique = None;
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if self.resultados.is_empty() {
-                    ui.label("Nenhum resultado encontrado.");
-                }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2]) // Melhora o comportamento no Android
+                .show(ui, |ui| {
+                    if self.resultados.is_empty() && !self.buscando {
+                        ui.label("Nenhum resultado encontrado.");
+                    }
 
-                // for res in &self.resultados {
-                //     ui.group(|ui| {
-                //         ui.vertical(|ui| {
-                //             // Título do resultado: "Gênesis 1:1"
-                //             let titulo =
-                //                 format!("{} {}:{}", res.livro_nome, res.capitulo, res.numero);
+                    // Armazenamos o termo normalizado para o realce (highlight)
+                    let termo_norm = normalizar(&self.termo_busca);
 
-                //             if ui.link(titulo).clicked() {
-                //                 destino_clique = Some((res.livro_id, res.capitulo, res.numero));
-                //             }
-
-                //             ui.label(&res.texto);
-                //         });
-                //     });
-                //     ui.add_space(8.0);
-                // }
-                for res in &self.resultados {
-                    ui.group(|ui| {
-                        ui.vertical(|ui| {
-                            // Título: "Livro 1:1"
-                            if ui
-                                .link(format!(
-                                    "{} {}:{}",
-                                    res.livro_nome, res.capitulo, res.numero
-                                ))
-                                .clicked()
-                            {
-                                destino_clique = Some((res.livro_id, res.capitulo, res.numero));
-                            }
-
-                            // Exibe o texto com realce
-                            ui.horizontal_wrapped(|ui| {
-                                let termo_alvo = self.termo_busca.to_lowercase();
-                                for palavra in res.texto.split_whitespace() {
-                                    // Limpa a palavra para comparar (ex: "Davi." vira "davi")
-                                    let palavra_limpa = palavra
-                                        .trim_matches(|c: char| !c.is_alphanumeric())
-                                        .to_lowercase();
-
-                                    if palavra_limpa == termo_alvo {
-                                        ui.label(
-                                            egui::RichText::new(palavra)
-                                                .color(egui::Color32::GOLD)
-                                                .strong(),
-                                        );
-                                    } else {
-                                        ui.label(palavra);
-                                    }
+                    for res in &self.resultados {
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                // Título: "Gênesis 1:1"
+                                let titulo =
+                                    format!("{} {}:{}", res.livro_nome, res.capitulo, res.numero);
+                                if ui.link(egui::RichText::new(titulo).strong()).clicked() {
+                                    destino_clique = Some((res.livro_id, res.capitulo, res.numero));
                                 }
+
+                                // Exibe o texto com realce inteligente
+                                ui.horizontal_wrapped(|ui| {
+                                    for palavra in res.texto.split_whitespace() {
+                                        // Se a palavra normalizada for igual ao termo normalizado
+                                        if normalizar(palavra) == termo_norm {
+                                            ui.label(
+                                                egui::RichText::new(palavra)
+                                                    .color(egui::Color32::GOLD)
+                                                    .strong(),
+                                            );
+                                        } else {
+                                            ui.label(palavra);
+                                        }
+                                    }
+                                });
                             });
                         });
-                    });
-                }
-                if let Some((livro_id, cap_num, versiculo_num)) = destino_clique {
-                    self.livro_selecionado = livro_id;
-                    self.capitulo = cap_num;
-                    self.pular_para_versiculo = Some(versiculo_num);
-                    self.carregar_capitulo();
-                    self.navegar_para(Tela::Leitura);
-                }
-            });
+                        ui.add_space(4.0);
+                    }
+
+                    // Lógica de navegação ao clicar em um resultado
+                    if let Some((livro_id, cap_num, versiculo_num)) = destino_clique {
+                        self.livro_selecionado = livro_id;
+                        self.capitulo = cap_num;
+                        self.pular_para_versiculo = Some(versiculo_num);
+                        self.carregar_capitulo();
+                        self.navegar_para(Tela::Leitura);
+                    }
+                });
         });
     }
 
