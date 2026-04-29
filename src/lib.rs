@@ -4,7 +4,6 @@ use eframe::{
     App,
     egui::{self, FontId, RichText, TextStyle, Visuals},
 };
-use env_logger::fmt::style::Color;
 use rusqlite::{Connection, Result};
 
 mod db;
@@ -118,6 +117,12 @@ impl BibliaApp {
         app.carregar_lista_livros();
         app.carregar_capitulo();
 
+        let tema_salvo = app.ler_config("tema", "claro");
+        app.tema_escuro = tema_salvo == "escuro";
+
+        let fonte_salva = app.ler_config("tamanho_fonte", "20");
+        app.tamanho_fonte = fonte_salva.parse().unwrap_or(20.0);
+
         app
     }
 
@@ -141,6 +146,15 @@ impl BibliaApp {
             // Dica: Adicione um índice para buscas rápidas por cor/favorito no futuro
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_favoritos ON marcacoes(favorito)",
+                [],
+            )
+            .ok();
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS config (
+                chave TEXT PRIMARY KEY,
+                valor TEXT
+            );",
                 [],
             )
             .ok();
@@ -260,39 +274,37 @@ impl BibliaApp {
     }
 
     fn executar_busca_async(&mut self) {
-        let termo_original = self.termo_busca.trim().to_string();
-        if termo_original.is_empty() {
+        let termo = self.termo_busca.trim().to_string();
+        if termo.is_empty() {
             return;
         }
 
-        // 1. Marcamos que estamos buscando para a UI mostrar o Spinner
         self.buscando = true;
-
-        // 2. Clonamos o que a thread vai precisar
         let tx = self.tx_busca.clone();
-        let termo_limpo = normalizar(&termo_original);
 
-        // 3. Criamos a thread (A mágica acontece aqui)
         std::thread::spawn(move || {
             let path = crate::db::get_db_path();
             let mut resultados = Vec::new();
 
             if let Ok(conn) = rusqlite::Connection::open(path) {
-                // USANDO O ÍNDICE: v.texto_busca é MUITO mais rápido que o LIKE '%text%'
+                // A query agora usa a tabela fts e o operador MATCH.
+                // ORDER BY rank ordena pelos versículos mais relevantes.
                 let mut stmt = conn
                     .prepare(
-                        "SELECT b.name, v.book, v.chapter, v.verse, v.text
-                     FROM verses v
-                     JOIN books b ON v.book = b.id
-                     WHERE v.texto_busca LIKE ?1
-                     LIMIT 200",
+                        "SELECT b.name, f.book, f.chapter, f.verse, f.text
+                         FROM verses_fts f
+                         JOIN books b ON f.book = b.id
+                         WHERE f.text MATCH ?1
+                         ORDER BY rank
+                         LIMIT 50",
                     )
                     .unwrap();
 
-                // Usamos a busca por frase/palavra no SQL
-                let termo_sql = format!("%{}%", termo_limpo);
+                // Envolvemos o termo em aspas duplas para o FTS buscar a frase exata.
+                // Exemplo: "Jesus chorou"
+                let termo_match = format!("\"{}\"", termo);
 
-                if let Ok(iter) = stmt.query_map([termo_sql], |row| {
+                if let Ok(iter) = stmt.query_map([termo_match], |row| {
                     Ok(ResultadoBusca {
                         livro_nome: row.get(0)?,
                         livro_id: row.get(1)?,
@@ -301,24 +313,43 @@ impl BibliaApp {
                         texto: row.get(4)?,
                     })
                 }) {
-                    // Refinamos no Rust para garantir que é a palavra exata (evitar o todavia)
-                    resultados = iter
-                        .filter_map(|res| res.ok())
-                        .filter(|res| {
-                            normalizar(&res.texto)
-                                .split_whitespace()
-                                .any(|p| p == termo_limpo)
-                        })
-                        .collect();
+                    // OLHA QUE LIMPO: Sem .filter(), sem normalizar()!
+                    // O SQLite já fez todo o trabalho pesado.
+                    resultados = iter.filter_map(|res| res.ok()).collect();
                 }
             }
 
-            // 4. Enviamos os resultados de volta para o canal (rx_busca vai receber)
             let _ = tx.send(resultados);
         });
     }
 
-    fn aplicar_tema_e_fonte(&self, ctx: &egui::Context) {
+    fn salvar_config(&self, chave: &str, valor: &str) {
+        let path = crate::db::get_db_path();
+        if let Ok(conn) = Connection::open(path) {
+            conn.execute(
+                "INSERT OR REPLACE INTO config (chave, valor) VALUES (?1, ?2)",
+                [chave, valor],
+            )
+            .ok();
+        }
+    }
+
+    fn ler_config(&self, chave: &str, padrao: &str) -> String {
+        let path = crate::db::get_db_path();
+        if let Ok(conn) = Connection::open(path) {
+            let mut stmt = conn
+                .prepare("SELECT valor FROM config WHERE chave = ?1")
+                .unwrap();
+            if let Ok(valor) = stmt.query_row([chave], |row| row.get::<_, String>(0)) {
+                return valor;
+            }
+        }
+        padrao.to_string()
+    }
+
+    fn aplicar_tema_e_fonte(&self, ui: &egui::Ui) {
+        let ctx = ui.ctx();
+
         // 1. Aplica o Tema Claro/Escuro
         let visuals = if self.tema_escuro {
             egui::Visuals::dark()
@@ -328,7 +359,7 @@ impl BibliaApp {
         ctx.set_visuals(visuals);
 
         // 2. Aplica o Tamanho da Fonte Dinamicamente
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
 
         style.text_styles.insert(
             egui::TextStyle::Body,
@@ -347,7 +378,7 @@ impl BibliaApp {
         style.spacing.item_spacing = egui::vec2(12.0, 12.0);
         style.spacing.button_padding = egui::vec2(12.0, 8.0);
 
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 
     fn livro_anterior(&mut self) {
@@ -690,6 +721,7 @@ impl BibliaApp {
 
             ui.separator();
 
+            material_button(ui, "Oieee");
             let mut destino_clique = None;
 
             egui::ScrollArea::vertical()
@@ -712,21 +744,8 @@ impl BibliaApp {
                                     destino_clique = Some((res.livro_id, res.capitulo, res.numero));
                                 }
 
-                                // Exibe o texto com realce inteligente
-                                ui.horizontal_wrapped(|ui| {
-                                    for palavra in res.texto.split_whitespace() {
-                                        // Se a palavra normalizada for igual ao termo normalizado
-                                        if normalizar(palavra) == termo_norm {
-                                            ui.label(
-                                                egui::RichText::new(palavra)
-                                                    .color(egui::Color32::GOLD)
-                                                    .strong(),
-                                            );
-                                        } else {
-                                            ui.label(palavra);
-                                        }
-                                    }
-                                });
+                                // Exibição do texto super rápida
+                                ui.label(&res.texto);
                             });
                         });
                         ui.add_space(4.0);
@@ -759,8 +778,18 @@ impl BibliaApp {
                     .color(ui.visuals().warn_fg_color),
             );
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tema_escuro, false, "🌞 Claro");
-                ui.selectable_value(&mut self.tema_escuro, true, "🌙 Escuro");
+                if ui
+                    .selectable_value(&mut self.tema_escuro, false, "🌞 Claro")
+                    .clicked()
+                {
+                    self.salvar_config("tema", "claro");
+                }
+                if ui
+                    .selectable_value(&mut self.tema_escuro, true, "🌙 Escuro")
+                    .clicked()
+                {
+                    self.salvar_config("tema", "escuro");
+                }
             });
 
             ui.add_space(20.0);
@@ -775,9 +804,15 @@ impl BibliaApp {
                 if ui.button(" A- ").clicked() {
                     self.tamanho_fonte = (self.tamanho_fonte - 2.0).max(12.0);
                 }
-                ui.add(egui::Slider::new(&mut self.tamanho_fonte, 12.0..=36.0).text("px"));
+                let slider =
+                    ui.add(egui::Slider::new(&mut self.tamanho_fonte, 12.0..=36.0).text("px"));
                 if ui.button(" A+ ").clicked() {
                     self.tamanho_fonte = (self.tamanho_fonte + 2.0).min(36.0);
+                }
+
+                if slider.changed() {
+                    // Salva a cada mudança no slider
+                    self.salvar_config("tamanho_fonte", &self.tamanho_fonte.to_string());
                 }
             });
 
@@ -829,7 +864,7 @@ impl BibliaApp {
 
 impl eframe::App for BibliaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.aplicar_tema_e_fonte(ui.ctx());
+        self.aplicar_tema_e_fonte(ui);
 
         // ui.ctx().set_debug_on_hover(true); // -> Pra debugar layout
 
@@ -937,4 +972,26 @@ fn normalizar(texto: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
         .collect::<String>()
         .to_lowercase()
+}
+
+pub fn material_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let padding = egui::vec2(24.0, 12.0); // Padding horizontal e vertical do M3
+
+    // Criamos um design de "Filled Button"
+    ui.scope(|ui| {
+        ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(208, 188, 255);
+        ui.style_mut().visuals.widgets.inactive.fg_stroke =
+            egui::Stroke::new(0.0, egui::Color32::BLACK);
+
+        // Renderiza com o texto em preto (contraste com o lilás)
+        ui.add(
+            egui::Button::new(
+                egui::RichText::new(text)
+                    .color(egui::Color32::BLACK)
+                    .size(16.0),
+            )
+            .min_size(egui::vec2(0.0, 40.0)),
+        )
+    })
+    .inner
 }
