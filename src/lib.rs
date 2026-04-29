@@ -4,6 +4,7 @@ use eframe::{
     App,
     egui::{self, FontId, RichText, TextStyle, Visuals},
 };
+use env_logger::fmt::style::Color;
 use rusqlite::{Connection, Result};
 
 mod db;
@@ -182,6 +183,7 @@ impl BibliaApp {
             style.visuals.window_corner_radius = 12.0.into();
             style.visuals.widgets.noninteractive.corner_radius = 8.0.into();
         }
+
         ctx.set_global_style(style);
     }
 
@@ -595,9 +597,46 @@ impl BibliaApp {
                 // MENU DE CORES
                 if is_selected {
                     ui.horizontal(|ui| {
-                        if ui.button("🟡 Amarelo").clicked() {
-                            acao_para_salvar = Some((v.numero, Some("#FFFF00"), None));
+                        // Lista com 4 cores no formato: (Hex, Color32)
+                        let paleta_cores = [
+                            ("#FFF83B", egui::Color32::from_rgb(255, 248, 59)), // Amarelo
+                            ("#90EE90", egui::Color32::from_rgb(144, 238, 144)), // Verde claro
+                            ("#ADD8E6", egui::Color32::from_rgb(173, 216, 230)), // Azul claro
+                            ("#FFB6C1", egui::Color32::from_rgb(255, 182, 193)), // Rosa claro
+                        ];
+
+                        for (hex, color32) in paleta_cores {
+                            // Define o tamanho da nossa área clicável (24x24 pixels)
+                            let tamanho_botao = egui::vec2(24.0, 24.0);
+
+                            // Aloca o espaço na interface e diz que ele pode ser clicado
+                            let (rect, response) =
+                                ui.allocate_exact_size(tamanho_botao, egui::Sense::click());
+
+                            // Só desenha se estiver visível na tela (otimização)
+                            if ui.is_rect_visible(rect) {
+                                let raio = 10.0; // Tamanho da bolinha
+
+                                // Desenha a bolinha colorida
+                                ui.painter().circle_filled(rect.center(), raio, color32);
+
+                                // Efeito visual bonitinho: se passar o mouse (ou dedo), desenha uma bordinha
+                                if response.hovered() {
+                                    ui.painter().circle_stroke(
+                                        rect.center(),
+                                        raio + 2.0,
+                                        egui::Stroke::new(1.5, ui.visuals().text_color()),
+                                    );
+                                }
+                            }
+
+                            // Se clicou na nossa área alocada, salva a cor
+                            if response.clicked() {
+                                acao_para_salvar = Some((v.numero, Some(hex), None));
+                            }
                         }
+
+                        ui.separator();
                         if ui.button("⭐ Favorito").clicked() {
                             acao_para_salvar = Some((v.numero, None, Some(true)));
                         }
