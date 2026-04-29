@@ -73,6 +73,8 @@ pub struct BibliaApp {
     buscando: bool,
     tx_busca: std::sync::mpsc::Sender<Vec<ResultadoBusca>>,
     rx_busca: std::sync::mpsc::Receiver<Vec<ResultadoBusca>>,
+    tema_escuro: bool,
+    tamanho_fonte: f32,
 }
 
 pub struct ResultadoBusca {
@@ -107,6 +109,8 @@ impl BibliaApp {
             buscando: false,
             tx_busca: tx,
             rx_busca: rx,
+            tema_escuro: false,
+            tamanho_fonte: 20.0,
         };
 
         app.inicializar_banco();
@@ -312,6 +316,38 @@ impl BibliaApp {
         });
     }
 
+    fn aplicar_tema_e_fonte(&self, ctx: &egui::Context) {
+        // 1. Aplica o Tema Claro/Escuro
+        let visuals = if self.tema_escuro {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+        ctx.set_visuals(visuals);
+
+        // 2. Aplica o Tamanho da Fonte Dinamicamente
+        let mut style = (*ctx.style()).clone();
+
+        style.text_styles.insert(
+            egui::TextStyle::Body,
+            egui::FontId::new(self.tamanho_fonte, egui::FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Heading,
+            egui::FontId::new(self.tamanho_fonte + 6.0, egui::FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            egui::TextStyle::Button,
+            egui::FontId::new(self.tamanho_fonte - 2.0, egui::FontFamily::Proportional),
+        );
+
+        // Espaçamentos amigáveis para toque (Mobile/Desktop)
+        style.spacing.item_spacing = egui::vec2(12.0, 12.0);
+        style.spacing.button_padding = egui::vec2(12.0, 8.0);
+
+        ctx.set_style(style);
+    }
+
     fn livro_anterior(&mut self) {
         if self.capitulo > 1 {
             self.capitulo -= 1;
@@ -409,11 +445,13 @@ impl BibliaApp {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Ícone da engrenagem para config
+                        if ui.button(egui::RichText::new("⚙").size(20.0)).clicked() {
+                            self.navegar_para(Tela::Configuracoes);
+                        }
+                        // Ícone de lupa para busca
                         if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
                             self.navegar_para(Tela::Busca);
-                        }
-                        if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
-                            self.navegar_para(Tela::Configuracoes);
                         }
 
                         ui.centered_and_justified(|ui| {
@@ -668,10 +706,69 @@ impl BibliaApp {
     }
 
     fn ui_config(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Tela de Configurações");
-        if ui.button("Tela leitura").clicked() {
-            self.navegar_para(Tela::Leitura);
-        }
+        ui.vertical_centered(|ui| {
+            ui.heading("⚙ Configurações");
+        });
+        ui.separator();
+        ui.add_space(10.0);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // Seção de Aparência
+            ui.label(
+                egui::RichText::new("Aparência")
+                    .strong()
+                    .color(ui.visuals().warn_fg_color),
+            );
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tema_escuro, false, "🌞 Claro");
+                ui.selectable_value(&mut self.tema_escuro, true, "🌙 Escuro");
+            });
+
+            ui.add_space(20.0);
+
+            // Seção de Leitura (Fonte)
+            ui.label(
+                egui::RichText::new("Tamanho do Texto")
+                    .strong()
+                    .color(ui.visuals().warn_fg_color),
+            );
+            ui.horizontal(|ui| {
+                if ui.button(" A- ").clicked() {
+                    self.tamanho_fonte = (self.tamanho_fonte - 2.0).max(12.0);
+                }
+                ui.add(egui::Slider::new(&mut self.tamanho_fonte, 12.0..=36.0).text("px"));
+                if ui.button(" A+ ").clicked() {
+                    self.tamanho_fonte = (self.tamanho_fonte + 2.0).min(36.0);
+                }
+            });
+
+            ui.add_space(20.0);
+
+            // Preview da Leitura
+            ui.group(|ui| {
+                ui.label(egui::RichText::new("Pré-visualização:").italics());
+                ui.add_space(5.0);
+                ui.label(format!(
+                    "{} No princípio, criou Deus os céus e a terra.",
+                    self.formatar_elevado(&1)
+                ));
+            });
+
+            ui.add_space(30.0);
+
+            // Botão de voltar grande
+            ui.vertical_centered(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new("Voltar para Leitura")
+                            .fill(egui::Color32::from_rgb(138, 154, 91)),
+                    )
+                    .clicked()
+                {
+                    self.navegar_para(Tela::Leitura);
+                }
+            });
+        });
     }
 
     fn limpar_marcacao(&mut self, num_v: i32) {
@@ -693,7 +790,8 @@ impl BibliaApp {
 
 impl eframe::App for BibliaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.renderizar_header(ui);
+        self.aplicar_tema_e_fonte(ui.ctx());
+
         // ui.ctx().set_debug_on_hover(true); // -> Pra debugar layout
 
         // 1. MENU LATERAL (DESKTOP & Android)
@@ -767,6 +865,8 @@ impl eframe::App for BibliaApp {
         egui::CentralPanel::default()
             .frame(frame)
             .show_inside(ui, |ui| {
+                self.renderizar_header(ui);
+
                 match self.tela_atual {
                     Tela::Leitura => self.ui_leitura(ui),
                     Tela::Busca => self.ui_busca(ui),
