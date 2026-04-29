@@ -2,7 +2,7 @@ use std::sync::mpsc::channel;
 
 use eframe::{
     App,
-    egui::{self, FontId, RichText, TextStyle, Visuals},
+    egui::{self, Color32, FontId, RichText, TextStyle, Visuals},
 };
 use rusqlite::{Connection, Result};
 
@@ -352,7 +352,10 @@ impl BibliaApp {
 
         // 1. Aplica o Tema Claro/Escuro
         let visuals = if self.tema_escuro {
-            egui::Visuals::dark()
+            let mut v = egui::Visuals::dark();
+            v.widgets.noninteractive.fg_stroke.color = egui::Color32::from_rgb(245, 245, 245);
+            v.panel_fill = egui::Color32::from_rgb(15, 15, 15);
+            v
         } else {
             egui::Visuals::light()
         };
@@ -598,13 +601,34 @@ impl BibliaApp {
             let mut novo_selecionado = self.selecionado;
 
             for v in &self.versiculos {
+                // let cor_texto = if self.tema_escuro && v.cor_hex.is_some() {
+                //     Color32::BLACK
+                // } else if self.tema_escuro {
+                //     Color32::WHITE
+                // } else {
+                //     Color32::BLACK
+                // };
+
+                // let mut cor_texto = ui.visuals().text_color();
+                // if v.cor_hex.is_some() {
+                //     cor_texto = egui::Color32::BLACK;
+                // }
+
                 let mut texto_rt =
-                    egui::RichText::new(format!("{} {}", v.numero_formatado, v.texto));
+                    egui::RichText::new(format!("{}-{}", v.numero_formatado, v.texto));
 
                 if let Some(hex) = &v.cor_hex {
-                    texto_rt = texto_rt.background_color(hex_para_color32(hex));
+                    //texto_rt = texto_rt.background_color(hex_para_color32(hex));
+                    let cor_fundo = hex_para_color32(hex);
+                    texto_rt = texto_rt.background_color(cor_fundo);
+                    texto_rt = texto_rt.color(egui::Color32::BLACK);
+                } else {
+                    if self.tema_escuro {
+                        texto_rt = texto_rt.color(egui::Color32::WHITE);
+                    } else {
+                        texto_rt = texto_rt.color(egui::Color32::BLACK);
+                    }
                 }
-
                 if v.favorito {
                     texto_rt = texto_rt.color(egui::Color32::GOLD).strong();
                 }
