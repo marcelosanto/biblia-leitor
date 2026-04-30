@@ -36,49 +36,36 @@ pub fn get_db_path() -> PathBuf {
 }
 
 pub fn otimizar_banco_se_necessario(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    // 1. Tenta adicionar a coluna (falha silenciosamente se já existir)
-    let _ = conn.execute("ALTER TABLE verses ADD COLUMN texto_busca TEXT", []);
-
-    // 2. Cria o índice para buscas instantâneas
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_verses_texto_busca ON verses(texto_busca)",
-        [],
-    )?;
-
-    // 3. Verifica se precisamos popular a coluna (checa se o primeiro versículo está nulo)
-    let precisa_popular: bool = conn.query_row(
-        "SELECT COUNT(*) FROM verses WHERE texto_busca IS NULL LIMIT 1",
+    let fts_existe: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='verses_fts'",
         [],
         |row| Ok(row.get::<_, i64>(0)? > 0),
     )?;
 
-    if precisa_popular {
-        println!("Otimizando banco de dados... isso ocorre apenas uma vez.");
+    if !fts_existe {
+        println!("Criando motor de busca avançada (FTS5)... Isso leva poucos segundos.");
 
-        conn.execute("BEGIN TRANSACTION", [])?; // <--- ISSO MUDA TUDO
-        // Buscamos todos os textos para normalizar no Rust
-        let mut stmt = conn.prepare("SELECT id, text FROM verses")?;
-        let rows = stmt.query_map(params![], |row| {
-            // Especifique os tipos explicitamente no get para ajudar o compilador
-            let id: i32 = row.get(0)?;
-            let texto: String = row.get(1)?;
-            Ok((id, texto))
-        })?;
+        conn.execute("BEGIN TRANSACTION", [])?;
 
-        for row in rows {
-            if let Ok((id, texto)) = row {
-                let texto_limpo = crate::normalizar(&texto);
+        conn.execute(
+            "CREATE VIRTUAL TABLE verses_fts USING fts5(
+                book UNINDEXED,
+                chapter UNINDEXED,
+                verse UNINDEXED,
+                text,
+                tokenize='unicode61 remove_diacritics 1'
+            )",
+            [],
+        )?;
 
-                // Use params! aqui para evitar o erro de Sized com strings
-                conn.execute(
-                    "UPDATE verses SET texto_busca = ?1 WHERE id = ?2",
-                    params![texto_limpo, id],
-                )?;
-            }
-        }
+        conn.execute(
+            "INSERT INTO verses_fts (rowid, book, chapter, verse, text)
+             SELECT id, book, chapter, verse, text FROM verses",
+            [],
+        )?;
 
         conn.execute("COMMIT", [])?;
-        println!("Otimização concluída!");
+        println!("Motor de busca FTS5 configurado com sucesso!");
     }
 
     Ok(())
