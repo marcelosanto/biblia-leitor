@@ -37,6 +37,7 @@ fn android_main(app: AndroidApp) {
 enum Tela {
     Leitura,
     Busca,
+    Menu,
     Configuracoes,
 }
 
@@ -67,6 +68,7 @@ pub struct BibliaApp {
     aguardando_saida: bool,
     historico: Vec<Tela>,
     selecionado: Option<i32>,
+    mostrar_menu_cores: bool,
     termo_busca: String,
     resultados: Vec<ResultadoBusca>,
     pular_para_versiculo: Option<i32>,
@@ -75,6 +77,7 @@ pub struct BibliaApp {
     rx_busca: std::sync::mpsc::Receiver<Vec<ResultadoBusca>>,
     tema_escuro: bool,
     tamanho_fonte: f32,
+    popup_config_aberto: bool,
 }
 
 pub struct ResultadoBusca {
@@ -103,6 +106,7 @@ impl BibliaApp {
             aguardando_saida: false,
             historico: Vec::new(),
             selecionado: None,
+            mostrar_menu_cores: false,
             termo_busca: String::new(),
             resultados: Vec::new(),
             pular_para_versiculo: None,
@@ -111,6 +115,7 @@ impl BibliaApp {
             rx_busca: rx,
             tema_escuro: false,
             tamanho_fonte: 20.0,
+            popup_config_aberto: false,
         };
 
         app.inicializar_banco();
@@ -483,7 +488,8 @@ impl BibliaApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Ícone da engrenagem para config
                         if ui.button(egui::RichText::new("⚙").size(20.0)).clicked() {
-                            self.navegar_para(Tela::Configuracoes);
+                            // self.navegar_para(Tela::Menu);
+                            self.popup_config_aberto = true
                         }
                         // Ícone de lupa para busca
                         if ui.button(egui::RichText::new("🔍").size(20.0)).clicked() {
@@ -518,6 +524,54 @@ impl BibliaApp {
                 }
             });
         });
+    }
+
+    fn renderizar_lista_opcoes(&mut self, ui: &mut egui::Ui) {
+        let tamanho_icone = 22.0;
+        let tamanho_fonte = 18.0;
+
+        // Helper simplificado
+        let mut item =
+            |ui: &mut egui::Ui, icone: &str, texto: &str, cor: egui::Color32| -> egui::Response {
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new(icone).size(tamanho_icone).color(cor));
+                    ui.add_space(10.0);
+                    ui.selectable_label(false, egui::RichText::new(texto).size(tamanho_fonte))
+                })
+                .inner
+            };
+
+        if item(ui, "❤", "Favoritos", egui::Color32::from_rgb(180, 40, 40)).clicked() { /* ... */
+        }
+        ui.add_space(8.0);
+        if item(ui, "🖍", "Destaques", egui::Color32::from_rgb(120, 80, 90)).clicked() { /* ... */
+        }
+        ui.add_space(8.0);
+        if item(
+            ui,
+            "✎",
+            "Notas Pessoais",
+            egui::Color32::from_rgb(80, 80, 90),
+        )
+        .clicked()
+        { /* ... */ }
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        if item(
+            ui,
+            "⚙",
+            "Configurações",
+            egui::Color32::from_rgb(80, 80, 90),
+        )
+        .clicked()
+        {
+            self.navegar_para(Tela::Configuracoes);
+            self.popup_config_aberto = false;
+        }
     }
 
     fn ui_leitura(&mut self, ui: &mut egui::Ui) {
@@ -581,137 +635,159 @@ impl BibliaApp {
 
         ui.separator();
 
-        let altura_do_texto = 24.0; // Estimativa da altura de cada linha
+        let altura_do_texto = self.tamanho_fonte + 12.0; // Altura dinâmica baseada na sua fonte
         let total_versiculos = self.versiculos.len();
 
-        let mut scroll_area = egui::ScrollArea::vertical();
+        let mut scroll_area = egui::ScrollArea::vertical()
+            .auto_shrink([false; 2]); // Melhora estabilidade no desktop
+        //.spacing(8.0);
 
-        // Reseta o scroll se o capítulo mudou
         if self.capitulo_mudou {
             scroll_area = scroll_area.scroll_offset(egui::Vec2::ZERO);
             self.capitulo_mudou = false;
         }
 
+        let mut novo_selecionado = self.selecionado;
+
         scroll_area.show_rows(ui, altura_do_texto, total_versiculos, |ui, range| {
-            // for v in &self.versiculos[range] {
-            //     ui.label(format!("{}{}", v.numero_formatado, v.texto));
-            // }
-            let mut acao_para_salvar = None;
-            let mut acao_para_limpar = None;
-            let mut novo_selecionado = self.selecionado;
+            ui.vertical(|ui| {
+                // Itera apenas sobre os versículos visíveis (otimização de memória)
+                for i in range {
+                    let v = &self.versiculos[i];
+                    let is_selected = self.selecionado == Some(v.numero);
 
-            for v in &self.versiculos {
-                // let cor_texto = if self.tema_escuro && v.cor_hex.is_some() {
-                //     Color32::BLACK
-                // } else if self.tema_escuro {
-                //     Color32::WHITE
-                // } else {
-                //     Color32::BLACK
-                // };
+                    // 1. Otimização de RichText: Evite format! excessivo se puder
+                    let mut texto_rt =
+                        egui::RichText::new(format!("{} {}", v.numero_formatado, v.texto))
+                            .size(self.tamanho_fonte);
 
-                // let mut cor_texto = ui.visuals().text_color();
-                // if v.cor_hex.is_some() {
-                //     cor_texto = egui::Color32::BLACK;
-                // }
-
-                let mut texto_rt =
-                    egui::RichText::new(format!("{}-{}", v.numero_formatado, v.texto));
-
-                if let Some(hex) = &v.cor_hex {
-                    //texto_rt = texto_rt.background_color(hex_para_color32(hex));
-                    let cor_fundo = hex_para_color32(hex);
-                    texto_rt = texto_rt.background_color(cor_fundo);
-                    texto_rt = texto_rt.color(egui::Color32::BLACK);
-                } else {
-                    if self.tema_escuro {
-                        texto_rt = texto_rt.color(egui::Color32::WHITE);
+                    // 2. Lógica de Cores (Cache visual)
+                    if let Some(hex) = &v.cor_hex {
+                        texto_rt = texto_rt
+                            .background_color(hex_para_color32(hex))
+                            .color(egui::Color32::BLACK);
                     } else {
-                        texto_rt = texto_rt.color(egui::Color32::BLACK);
+                        texto_rt = texto_rt.color(if self.tema_escuro {
+                            egui::Color32::WHITE
+                        } else {
+                            egui::Color32::BLACK
+                        });
+                    }
+
+                    if v.favorito && v.cor_hex.is_none() {
+                        texto_rt = texto_rt.color(egui::Color32::GOLD).strong();
+                    }
+
+                    if is_selected {
+                        texto_rt = texto_rt.underline();
+                    }
+
+                    // 3. Renderização com Detecção de Toque Longo / Clique Secundário
+                    let resp = ui.selectable_label(is_selected, texto_rt);
+
+                    // Toque rápido: Apenas seleciona o versículo
+                    if resp.clicked() {
+                        novo_selecionado = if is_selected { None } else { Some(v.numero) };
+                        self.mostrar_menu_cores = false; // Fecha o menu se for só um clique simples
+                    }
+
+                    // TOQUE LONGO ou CLIQUE DIREITO (Desktop): Abre o Balde de Tinta
+                    if resp.interact(egui::Sense::click()).long_touched()
+                        || resp.secondary_clicked()
+                    {
+                        novo_selecionado = Some(v.numero);
+                        self.mostrar_menu_cores = true; // Flag para ativar o Area abaixo
+
+                        // No desktop, o clique direito já marca, no Android o toque longo faz o mesmo
+                    }
+
+                    // Scroll suave vindo da busca
+                    if self.pular_para_versiculo == Some(v.numero) {
+                        resp.scroll_to_me(Some(egui::Align::Center));
+                        self.pular_para_versiculo = None;
+                        novo_selecionado = Some(v.numero);
                     }
                 }
-                if v.favorito {
-                    texto_rt = texto_rt.color(egui::Color32::GOLD).strong();
-                }
-
-                let is_selected = self.selecionado == Some(v.numero);
-
-                // RENDERIZA O VERSÍCULO
-                let resp = ui.selectable_label(is_selected, texto_rt);
-
-                // LÓGICA DE SCROLL: Se viemos da busca, pula para cá
-                if self.pular_para_versiculo == Some(v.numero) {
-                    resp.scroll_to_me(Some(egui::Align::TOP));
-                    novo_selecionado = Some(v.numero); // Destaca ele
-                    self.pular_para_versiculo = None; // Limpa a flag
-                }
-
-                if resp.clicked() {
-                    novo_selecionado = if is_selected { None } else { Some(v.numero) };
-                }
-
-                // MENU DE CORES
-                if is_selected {
-                    ui.horizontal(|ui| {
-                        // Lista com 4 cores no formato: (Hex, Color32)
-                        let paleta_cores = [
-                            ("#FFF83B", egui::Color32::from_rgb(255, 248, 59)), // Amarelo
-                            ("#90EE90", egui::Color32::from_rgb(144, 238, 144)), // Verde claro
-                            ("#ADD8E6", egui::Color32::from_rgb(173, 216, 230)), // Azul claro
-                            ("#FFB6C1", egui::Color32::from_rgb(255, 182, 193)), // Rosa claro
-                        ];
-
-                        for (hex, color32) in paleta_cores {
-                            // Define o tamanho da nossa área clicável (24x24 pixels)
-                            let tamanho_botao = egui::vec2(24.0, 24.0);
-
-                            // Aloca o espaço na interface e diz que ele pode ser clicado
-                            let (rect, response) =
-                                ui.allocate_exact_size(tamanho_botao, egui::Sense::click());
-
-                            // Só desenha se estiver visível na tela (otimização)
-                            if ui.is_rect_visible(rect) {
-                                let raio = 10.0; // Tamanho da bolinha
-
-                                // Desenha a bolinha colorida
-                                ui.painter().circle_filled(rect.center(), raio, color32);
-
-                                // Efeito visual bonitinho: se passar o mouse (ou dedo), desenha uma bordinha
-                                if response.hovered() {
-                                    ui.painter().circle_stroke(
-                                        rect.center(),
-                                        raio + 2.0,
-                                        egui::Stroke::new(1.5, ui.visuals().text_color()),
-                                    );
-                                }
-                            }
-
-                            // Se clicou na nossa área alocada, salva a cor
-                            if response.clicked() {
-                                acao_para_salvar = Some((v.numero, Some(hex), None));
-                            }
-                        }
-
-                        ui.separator();
-                        if ui.button("⭐ Favorito").clicked() {
-                            acao_para_salvar = Some((v.numero, None, Some(true)));
-                        }
-                        if ui.button("🗑️ Limpar").clicked() {
-                            acao_para_limpar = Some(v.numero);
-                        }
-                    });
-                }
-            }
-
-            // APLICA AS MUDANÇAS (Fora do loop para evitar erro de borrow)
-            self.selecionado = novo_selecionado;
-
-            if let Some((num, cor, fav)) = acao_para_salvar {
-                self.salvar_marcacao(num, cor, fav);
-            }
-            if let Some(num) = acao_para_limpar {
-                self.limpar_marcacao(num);
-            }
+            });
         });
+
+        self.selecionado = novo_selecionado;
+
+        if let (Some(id_versiculo), true) = (self.selecionado, self.mostrar_menu_cores) {
+            egui::Area::new(egui::Id::new("menu_marcador_flutuante"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -50.0))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::NONE
+                        .fill(ui.visuals().window_fill())
+                        .corner_radius(10.0)
+                        .shadow(ui.visuals().window_shadow)
+                        .inner_margin(12.0)
+                        .stroke(ui.visuals().widgets.active.bg_stroke)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{}:", id_versiculo)).strong(),
+                                );
+
+                                let paleta = [
+                                    ("#FFF83B", egui::Color32::from_rgb(255, 248, 59)),
+                                    ("#90EE90", egui::Color32::from_rgb(144, 238, 144)),
+                                    ("#ADD8E6", egui::Color32::from_rgb(173, 216, 230)),
+                                    ("#FFB6C1", egui::Color32::from_rgb(255, 182, 193)),
+                                ];
+
+                                for (hex, color32) in paleta {
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(32.0, 32.0),
+                                        egui::Sense::click(),
+                                    );
+
+                                    // Desenho do círculo
+                                    ui.painter().circle_filled(rect.center(), 12.0, color32);
+
+                                    if response.hovered() {
+                                        ui.painter().circle_stroke(
+                                            rect.center(),
+                                            14.0,
+                                            egui::Stroke::new(2.0, ui.visuals().text_color()),
+                                        );
+                                    }
+
+                                    if response.clicked() {
+                                        // Ação imediata na memória para remover o lag visual
+                                        if let Some(v) = self
+                                            .versiculos
+                                            .iter_mut()
+                                            .find(|v| v.numero == id_versiculo)
+                                        {
+                                            v.cor_hex = Some(hex.to_string());
+                                        }
+                                        self.salvar_marcacao(id_versiculo, Some(hex), None);
+                                        self.mostrar_menu_cores = false; // Fecha após pintar
+                                    }
+                                }
+
+                                ui.separator();
+
+                                if ui.button("⭐").clicked() {
+                                    self.salvar_marcacao(id_versiculo, None, Some(true));
+                                    self.mostrar_menu_cores = false;
+                                }
+
+                                if ui.button("🗑").clicked() {
+                                    self.limpar_marcacao(id_versiculo);
+                                    self.selecionado = None;
+                                    self.mostrar_menu_cores = false;
+                                }
+
+                                if ui.button("✕").clicked() {
+                                    self.mostrar_menu_cores = false;
+                                }
+                            });
+                        });
+                });
+        }
     }
 
     fn ui_busca(&mut self, ui: &mut egui::Ui) {
@@ -917,44 +993,34 @@ impl eframe::App for BibliaApp {
             }
         }
 
-        // 2. MENU INFERIOR (ANDROID)
-        // #[cfg(target_os = "android")]
-        // egui::Panel::bottom("navegacao_mobile").show_inside(ui, |ui| {
-        //     ui.horizontal(|ui| {
-        //         egui::ComboBox::from_label("")
-        //             .selected_text(&self.nome_livro)
-        //             .show_ui(ui, |ui| {
-        //                 for livro in &self.lista_livros.clone() {
-        //                     if ui
-        //                         .selectable_value(
-        //                             &mut self.livro_selecionado,
-        //                             livro.id,
-        //                             &livro.name,
-        //                         )
-        //                         .clicked()
-        //                     {
-        //                         self.nome_livro = livro.name.clone();
-        //                         self.capitulo = 1;
-        //                         self.carregar_capitulo();
-        //                     }
-        //                 }
-        //             });
-        //         if ui
-        //             .add_enabled(self.capitulo > 1, egui::Button::new("⬅ Anterior"))
-        //             .clicked()
-        //         {
-        //             self.livro_anterior();
-        //         }
-        //         let n_capitulos = self.total_capitulos_do_livro(self.livro_selecionado);
+        if self.popup_config_aberto {
+            let mut fechar_agora = false;
 
-        //         if ui
-        //             .add_enabled(self.capitulo < n_capitulos, egui::Button::new("Próximo ➡"))
-        //             .clicked()
-        //         {
-        //             self.proximo_livro();
-        //         }
-        //     });
-        // });
+            egui::Window::new("Menu")
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .collapsible(false)
+                .resizable(false)
+                .title_bar(false)
+                .frame(egui::Frame::window(&ui.style()).inner_margin(15.0))
+                .show(ui.ctx(), |ui| {
+                    self.renderizar_lista_opcoes(ui);
+
+                    ui.add_space(10.0);
+                    if ui.button("FECHAR").clicked() {
+                        fechar_agora = true;
+                    }
+                });
+
+            // Lógica inteligente para fechar ao clicar fora sem "piscar"
+            // Verificamos se o ponteiro clicou mas NÃO está sobre a janela do popup
+            if ui.input(|i| i.pointer.any_click()) && !ui.ctx().is_using_pointer() {
+                fechar_agora = true;
+            }
+
+            if fechar_agora {
+                self.popup_config_aberto = false;
+            }
+        }
 
         let mut frame = egui::Frame::central_panel(&ui.ctx().global_style());
         frame.inner_margin.top = 40;
@@ -969,7 +1035,7 @@ impl eframe::App for BibliaApp {
                     Tela::Leitura => self.ui_leitura(ui),
                     Tela::Busca => self.ui_busca(ui),
                     Tela::Configuracoes => self.ui_config(ui),
-                    // _ => ui.label("Nenhuma?"),
+                    Tela::Menu => self.renderizar_lista_opcoes(ui),
                 }
             });
     }
