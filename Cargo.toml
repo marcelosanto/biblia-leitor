@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
-unicode-normalization = "0.1.25"
+#unicode-normalization = "0.1.25"
 
 # --- CONFIGURAÇÃO PARA DESKTOP (Linux/Windows/macOS) ---
 [target.'cfg(not(target_os = "android"))'.dependencies]

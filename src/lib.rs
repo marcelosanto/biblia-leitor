@@ -53,12 +53,13 @@ pub struct Versiculo {
     pub numero_formatado: String,
     pub texto: String,
     pub cor_hex: Option<String>,
+    pub cor_render: Option<egui::Color32>,
     pub favorito: bool,
 }
 
 pub struct BibliaApp {
     tela_atual: Tela,
-    livro_selecionado: i32,
+    id_livro: i32,
     nome_livro: String,
     lista_livros: Vec<Livro>,
     capitulo: i32,
@@ -96,7 +97,7 @@ impl BibliaApp {
 
         let mut app = Self {
             tela_atual: Tela::Leitura,
-            livro_selecionado: 1,
+            id_livro: 1,
             nome_livro: "Gênesis".to_string(),
             lista_livros: Vec::new(),
             capitulo: 1,
@@ -120,7 +121,7 @@ impl BibliaApp {
 
         app.inicializar_banco();
         app.carregar_lista_livros();
-        app.carregar_capitulo();
+        app.carregar_versiculos();
 
         let tema_salvo = app.ler_config("tema", "claro");
         app.tema_escuro = tema_salvo == "escuro";
@@ -243,38 +244,38 @@ impl BibliaApp {
         1 // Valor padrão caso algo falhe
     }
 
-    fn carregar_capitulo(&mut self) {
+    // Testes ??? mudar apos isso ???
+    //
+    fn carregar_versiculos(&mut self) {
         let path = crate::db::get_db_path();
+        if let Ok(conn) = Connection::open(path) {
+            // Buscamos os versículos e fazemos JOIN com a tabela de marcações (se houver)
+            // para já trazer a cor e o status de favorito
+            let mut stmt = conn.prepare("SELECT v.verse, v.text, m.cor, m.favorito
+                FROM verses v
+                LEFT JOIN marcacoes m ON v.book = m.book AND v.chapter = m.chapter AND v.verse = m.verse
+                WHERE v.book = ?1 AND v.chapter = ?2
+                ORDER BY v.verse ASC").unwrap();
 
-        match Connection::open(&path) {
-            Ok(conn) => {
-                let mut stmt = conn
-                    .prepare("SELECT v.verse, v.text, m.cor, m.favorito
-                                 FROM verses v
-                                 LEFT JOIN marcacoes m ON v.book = m.book AND v.chapter = m.chapter AND v.verse = m.verse
-                                 WHERE v.book = ?1 AND v.chapter = ?2")
-                    .unwrap();
+            let versiculos_iter = stmt.query_map([self.id_livro, self.capitulo], |row| {
+                let num: i32 = row.get(0)?;
+                let fav_int: Option<i32> = row.get(3)?;
+                let cor_hex: Option<String> = row.get(2).ok();
 
-                let iter = stmt
-                    .query_map([self.livro_selecionado, self.capitulo], |row| {
-                        let num: i32 = row.get(0)?;
-                        let fav_int: Option<i32> = row.get(3)?;
+                // CONVERSÃO DE CACHE: Transformamos o Hex em Color32 uma única vez aqui
+                let cor_render = cor_hex.as_ref().map(|hex| hex_para_color32(hex));
 
-                        Ok(Versiculo {
-                            numero: num,
-                            numero_formatado: self.formatar_elevado(&num),
-                            texto: row.get(1)?,
-                            cor_hex: row.get(2).ok(), // Se for NULL, vira None
-                            favorito: fav_int.unwrap_or(0) == 1,
-                        })
-                    })
-                    .unwrap();
+                Ok(Versiculo {
+                    numero: num,
+                    texto: row.get(1)?,
+                    numero_formatado: row.get::<_, i32>(0)?.to_string(),
+                    cor_hex,
+                    cor_render, // Cache pronto para o egui usar
+                    favorito: fav_int.unwrap_or(0) == 1,
+                })
+            }).unwrap();
 
-                self.versiculos = iter.filter_map(|res| res.ok()).collect();
-            }
-            Err(e) => {
-                eprintln!("Erro ao abrir banco em {:?}: {}", path, e);
-            }
+            self.versiculos = versiculos_iter.filter_map(|v| v.ok()).collect();
         }
     }
 
@@ -392,13 +393,13 @@ impl BibliaApp {
     fn livro_anterior(&mut self) {
         if self.capitulo > 1 {
             self.capitulo -= 1;
-            self.carregar_capitulo();
+            self.carregar_versiculos();
         }
     }
 
     fn proximo_livro(&mut self) {
         self.capitulo += 1;
-        self.carregar_capitulo();
+        self.carregar_versiculos();
     }
 
     fn formatar_elevado(&self, valor: &i32) -> String {
@@ -434,13 +435,13 @@ impl BibliaApp {
             // Usamos INSERT OR IGNORE para garantir que a linha exista
             conn.execute(
                 "INSERT OR IGNORE INTO marcacoes (book, chapter, verse, favorito) VALUES (?1, ?2, ?3, 0)",
-                rusqlite::params![self.livro_selecionado, self.capitulo, num_v],
+                rusqlite::params![self.id_livro, self.capitulo, num_v],
             ).ok();
 
             if let Some(c) = cor {
                 conn.execute(
                     "UPDATE marcacoes SET cor = ?1 WHERE book = ?2 AND chapter = ?3 AND verse = ?4",
-                    rusqlite::params![c, self.livro_selecionado, self.capitulo, num_v],
+                    rusqlite::params![c, self.id_livro, self.capitulo, num_v],
                 )
                 .ok();
             }
@@ -449,11 +450,11 @@ impl BibliaApp {
                 let val = if f { 1 } else { 0 };
                 conn.execute(
                     "UPDATE marcacoes SET favorito = ?1 WHERE book = ?2 AND chapter = ?3 AND verse = ?4",
-                    rusqlite::params![val, self.livro_selecionado, self.capitulo, num_v],
+                    rusqlite::params![val, self.id_livro, self.capitulo, num_v],
                 ).ok();
             }
         }
-        self.carregar_capitulo(); // Recarrega a UI
+        self.carregar_versiculos(); // Recarrega a UI
     }
 
     fn voltar(&mut self) {
@@ -465,7 +466,7 @@ impl BibliaApp {
     fn renderizar_header(&mut self, ui: &mut egui::Ui) {
         let mut top_frame = egui::Frame::NONE
             .fill(ui.visuals().window_fill())
-            .inner_margin(egui::Margin::same(16));
+            .inner_margin(egui::Margin::same(0));
 
         let mut margin = top_frame.inner_margin;
 
@@ -511,12 +512,12 @@ impl BibliaApp {
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for livro in &self.lista_livros.clone() {
-                    let is_selected = self.livro_selecionado == livro.id;
+                    let is_selected = self.id_livro == livro.id;
                     if ui.selectable_label(is_selected, &livro.name).clicked() {
-                        self.livro_selecionado = livro.id;
+                        self.id_livro = livro.id;
                         self.nome_livro = livro.name.clone();
                         self.capitulo = 1;
-                        self.carregar_capitulo();
+                        self.carregar_versiculos();
                         self.capitulo_mudou = true;
                         self.menu_aberto = false;
                         self.navegar_para(Tela::Leitura);
@@ -577,6 +578,7 @@ impl BibliaApp {
     fn ui_leitura(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
+                println!("carreguei {}", self.nome_livro);
                 // Isso centraliza o grupo horizontal dentro da largura disponível
                 let total_width = ui.available_width();
 
@@ -619,7 +621,7 @@ impl BibliaApp {
                 ui.add_space(20.0);
 
                 // --- Botão Direito ---
-                let n_cap = self.total_capitulos_do_livro(self.livro_selecionado);
+                let n_cap = self.total_capitulos_do_livro(self.id_livro);
                 let btn_next = egui::Button::new(
                     egui::RichText::new(">")
                         .size(24.0)
@@ -821,7 +823,6 @@ impl BibliaApp {
 
             ui.separator();
 
-            material_button(ui, "Oieee");
             let mut destino_clique = None;
 
             egui::ScrollArea::vertical()
@@ -831,8 +832,6 @@ impl BibliaApp {
                         ui.label("Nenhum resultado encontrado.");
                     }
 
-                    // Armazenamos o termo normalizado para o realce (highlight)
-                    let termo_norm = normalizar(&self.termo_busca);
 
                     for res in &self.resultados {
                         ui.group(|ui| {
@@ -841,7 +840,7 @@ impl BibliaApp {
                                 let titulo =
                                     format!("{} {}:{}", res.livro_nome, res.capitulo, res.numero);
                                 if ui.link(egui::RichText::new(titulo).strong()).clicked() {
-                                    destino_clique = Some((res.livro_id, res.capitulo, res.numero));
+                                    destino_clique = Some((res.livro_id, res.livro_nome.clone(), res.capitulo, res.numero));
                                 }
 
                                 // Exibição do texto super rápida
@@ -852,11 +851,14 @@ impl BibliaApp {
                     }
 
                     // Lógica de navegação ao clicar em um resultado
-                    if let Some((livro_id, cap_num, versiculo_num)) = destino_clique {
-                        self.livro_selecionado = livro_id;
+                    if let Some((livro_id,livro_nome, cap_num, versiculo_num)) = destino_clique {
+                        self.id_livro = livro_id;
                         self.capitulo = cap_num;
                         self.pular_para_versiculo = Some(versiculo_num);
-                        self.carregar_capitulo();
+                        self.nome_livro = livro_nome;
+                        self.capitulo_mudou = true;
+                        self.carregar_versiculos();
+
                         self.navegar_para(Tela::Leitura);
                     }
                 });
@@ -951,14 +953,14 @@ impl BibliaApp {
             // Remove a linha da tabela de marcações
             conn.execute(
                 "DELETE FROM marcacoes WHERE book = ?1 AND chapter = ?2 AND verse = ?3",
-                rusqlite::params![self.livro_selecionado, self.capitulo, num_v],
+                rusqlite::params![self.id_livro, self.capitulo, num_v],
             )
             .ok();
         }
 
         // Atualiza a lista da memória e limpa a seleção da tela
         self.selecionado = None;
-        self.carregar_capitulo();
+        self.carregar_versiculos();
     }
 }
 
@@ -1052,36 +1054,4 @@ fn hex_para_color32(hex: &str) -> egui::Color32 {
     } else {
         egui::Color32::from_rgb(255, 255, 0)
     }
-}
-
-fn normalizar(texto: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-
-    texto
-        .nfd()
-        .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
-        .collect::<String>()
-        .to_lowercase()
-}
-
-pub fn material_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let padding = egui::vec2(24.0, 12.0); // Padding horizontal e vertical do M3
-
-    // Criamos um design de "Filled Button"
-    ui.scope(|ui| {
-        ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(208, 188, 255);
-        ui.style_mut().visuals.widgets.inactive.fg_stroke =
-            egui::Stroke::new(0.0, egui::Color32::BLACK);
-
-        // Renderiza com o texto em preto (contraste com o lilás)
-        ui.add(
-            egui::Button::new(
-                egui::RichText::new(text)
-                    .color(egui::Color32::BLACK)
-                    .size(16.0),
-            )
-            .min_size(egui::vec2(0.0, 40.0)),
-        )
-    })
-    .inner
 }
