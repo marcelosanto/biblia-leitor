@@ -6,6 +6,12 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Nome diferente do lib: o Trunk (web) não consegue escolher entre
+# dois artefatos chamados "biblia_egui" (lib cdylib + bin).
+[[bin]]
+name = "biblia"
+path = "src/main.rs"
+
 [dependencies]
 log = "0.4"
 serde = { version = "1.0.229", features = ["derive"] }
