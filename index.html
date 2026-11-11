@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#faf7f2" />
+  <title>Bíblia Sagrada</title>
+  <link data-trunk rel="rust" data-bin="biblia_egui" data-wasm-opt="z" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #faf7f2; overflow: hidden; }
+    canvas { width: 100%; height: 100%; display: block; }
+    #carregando { position: fixed; inset: 0; display: grid; place-items: center;
+      font: 18px Georgia, serif; color: #7e756b; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="carregando">Carregando…</div>
+  <canvas id="the_canvas_id"></canvas>
+  <script>
+    // some com o "Carregando…" quando o app desenhar o primeiro frame
+    new MutationObserver((_, o) => { document.getElementById('carregando')?.remove(); o.disconnect(); })
+      .observe(document.getElementById('the_canvas_id'), { attributes: true });
+    setTimeout(() => document.getElementById('carregando')?.remove(), 6000);
+  </script>
+</body>
+</html>
