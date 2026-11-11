@@ -6,11 +6,12 @@ use eframe::egui::{
     text::{LayoutJob, TextFormat},
     vec2,
 };
-use rusqlite::Connection;
-
+#[cfg(not(target_arch = "wasm32"))]
 mod db;
+mod storage;
 mod tema;
 
+use storage::{FiltroSalvos, Livro, ResultadoBusca, Salvo, Storage, Versiculo};
 use tema::{
     Icone, Paleta, Tema, aba, alpha, botao_icone, chip, cor_destaque, desenhar_icone, hex_cor,
     serif,
@@ -62,12 +63,6 @@ enum Tela {
     Salvos,
 }
 
-#[derive(PartialEq, Clone, Copy)]
-enum FiltroSalvos {
-    Favoritos,
-    Destaques,
-}
-
 enum Acao {
     Cor(&'static str),
     LimparCor,
@@ -75,39 +70,8 @@ enum Acao {
     Favorito,
 }
 
-#[derive(Clone)]
-pub struct Livro {
-    pub id: i32,
-    pub name: String,
-    pub abbrev: String,
-}
-
-pub struct Versiculo {
-    pub numero: i32,
-    pub texto: String,
-    pub cor: Option<String>,
-    pub favorito: bool,
-}
-
-pub struct ResultadoBusca {
-    pub livro_nome: String,
-    pub livro_id: i32,
-    pub capitulo: i32,
-    pub numero: i32,
-    pub texto: String,
-}
-
-pub struct Salvo {
-    pub livro_id: i32,
-    pub livro_nome: String,
-    pub capitulo: i32,
-    pub numero: i32,
-    pub texto: String,
-    pub cor: Option<String>,
-    pub favorito: bool,
-}
-
 pub struct BibliaApp {
+    store: Storage,
     tela: Tela,
     tema: Tema,
     tamanho_fonte: f32,
@@ -154,6 +118,7 @@ impl BibliaApp {
 
         let (tx, rx) = channel();
         let mut app = Self {
+            store: Storage::new(),
             tela: Tela::Leitura,
             tema: Tema::Claro,
             tamanho_fonte: 20.0,
@@ -184,7 +149,6 @@ impl BibliaApp {
             aguardando_saida: false,
         };
 
-        app.inicializar_banco();
         app.carregar_lista_livros();
 
         app.tema = Tema::de_chave(&app.ler_config("tema", "claro"));
@@ -205,227 +169,49 @@ impl BibliaApp {
         app
     }
 
-    // ───────────────────────── Banco de dados ─────────────────────────
-
-    pub fn inicializar_banco(&mut self) {
-        let path = crate::db::get_db_path();
-        if let Ok(conn) = Connection::open(path) {
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS marcacoes (
-                    book INTEGER, chapter INTEGER, verse INTEGER, cor TEXT,
-                    favorito INTEGER DEFAULT 0,
-                    PRIMARY KEY (book, chapter, verse)
-                )",
-                [],
-            )
-            .ok();
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_favoritos ON marcacoes(favorito)",
-                [],
-            )
-            .ok();
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS config (chave TEXT PRIMARY KEY, valor TEXT)",
-                [],
-            )
-            .ok();
-            if let Err(e) = crate::db::otimizar_banco_se_necessario(&conn) {
-                eprintln!("Erro na otimização: {}", e);
-            }
-        }
-    }
-
-    fn abrir(&self) -> Option<Connection> {
-        Connection::open(crate::db::get_db_path()).ok()
-    }
+    // ───────────────────────── Dados (via Storage) ─────────────────────────
 
     fn carregar_lista_livros(&mut self) {
-        let Some(conn) = self.abrir() else { return };
-        let Ok(mut stmt) = conn.prepare("SELECT id, name, abbrev FROM books ORDER BY id") else {
-            return;
-        };
-        if let Ok(iter) = stmt.query_map([], |row| {
-            Ok(Livro {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                abbrev: row.get(2)?,
-            })
-        }) {
-            self.lista_livros = iter.filter_map(|r| r.ok()).collect();
-        }
+        self.lista_livros = self.store.livros();
     }
 
     fn consultar_total_caps(&self, livro_id: i32) -> i32 {
-        self.abrir()
-            .and_then(|conn| {
-                conn.query_row(
-                    "SELECT COALESCE(MAX(chapter), 1) FROM verses WHERE book = ?1",
-                    [livro_id],
-                    |row| row.get::<_, i32>(0),
-                )
-                .ok()
-            })
-            .unwrap_or(1)
+        self.store.total_caps(livro_id)
     }
 
     fn carregar_versiculos(&mut self) {
-        let Some(conn) = self.abrir() else { return };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT v.verse, v.text, m.cor, m.favorito
-             FROM verses v
-             LEFT JOIN marcacoes m ON v.book = m.book AND v.chapter = m.chapter AND v.verse = m.verse
-             WHERE v.book = ?1 AND v.chapter = ?2
-             ORDER BY v.verse ASC",
-        ) else {
-            return;
-        };
-        if let Ok(iter) = stmt.query_map([self.id_livro, self.capitulo], |row| {
-            let fav: Option<i32> = row.get(3)?;
-            Ok(Versiculo {
-                numero: row.get(0)?,
-                texto: row.get(1)?,
-                cor: row.get::<_, Option<String>>(2)?,
-                favorito: fav.unwrap_or(0) == 1,
-            })
-        }) {
-            self.versiculos = iter.filter_map(|v| v.ok()).collect();
-        }
+        self.versiculos = self.store.versiculos(self.id_livro, self.capitulo);
     }
 
     fn carregar_salvos(&mut self) {
-        let filtro = match self.filtro_salvos {
-            FiltroSalvos::Favoritos => "m.favorito = 1",
-            FiltroSalvos::Destaques => "m.cor IS NOT NULL",
-        };
-        let sql = format!(
-            "SELECT m.book, b.name, m.chapter, m.verse, v.text, m.cor, m.favorito
-             FROM marcacoes m
-             JOIN verses v ON v.book = m.book AND v.chapter = m.chapter AND v.verse = m.verse
-             JOIN books b ON b.id = m.book
-             WHERE {filtro}
-             ORDER BY m.book, m.chapter, m.verse LIMIT 500"
-        );
-        self.salvos.clear();
-        let Some(conn) = self.abrir() else { return };
-        let Ok(mut stmt) = conn.prepare(&sql) else {
-            return;
-        };
-        if let Ok(iter) = stmt.query_map([], |row| {
-            let fav: Option<i32> = row.get(6)?;
-            Ok(Salvo {
-                livro_id: row.get(0)?,
-                livro_nome: row.get(1)?,
-                capitulo: row.get(2)?,
-                numero: row.get(3)?,
-                texto: row.get(4)?,
-                cor: row.get::<_, Option<String>>(5)?,
-                favorito: fav.unwrap_or(0) == 1,
-            })
-        }) {
-            self.salvos = iter.filter_map(|r| r.ok()).collect();
-        }
+        self.salvos = self.store.salvos(self.filtro_salvos);
     }
 
     fn executar_busca_async(&mut self) {
-        // Remove aspas do usuário e busca a frase exata no FTS5.
-        let termo = self.termo_busca.replace('"', " ").trim().to_string();
-        if termo.is_empty() {
+        if self.termo_busca.replace('"', " ").trim().is_empty() {
             return;
         }
         self.buscando = true;
-        let tx = self.tx_busca.clone();
-
-        std::thread::spawn(move || {
-            let mut resultados = Vec::new();
-            if let Ok(conn) = Connection::open(crate::db::get_db_path()) {
-                if let Ok(mut stmt) = conn.prepare(
-                    "SELECT b.name, f.book, f.chapter, f.verse, f.text
-                     FROM verses_fts f
-                     JOIN books b ON f.book = b.id
-                     WHERE f.text MATCH ?1
-                     ORDER BY rank
-                     LIMIT 50",
-                ) {
-                    let termo_match = format!("\"{}\"", termo);
-                    if let Ok(iter) = stmt.query_map([termo_match], |row| {
-                        Ok(ResultadoBusca {
-                            livro_nome: row.get(0)?,
-                            livro_id: row.get(1)?,
-                            capitulo: row.get(2)?,
-                            numero: row.get(3)?,
-                            texto: row.get(4)?,
-                        })
-                    }) {
-                        resultados = iter.filter_map(|r| r.ok()).collect();
-                    }
-                }
-            }
-            let _ = tx.send(resultados);
-        });
+        self.store
+            .buscar_async(self.termo_busca.clone(), self.tx_busca.clone());
     }
 
     fn salvar_config(&self, chave: &str, valor: &str) {
-        if let Some(conn) = self.abrir() {
-            conn.execute(
-                "INSERT OR REPLACE INTO config (chave, valor) VALUES (?1, ?2)",
-                [chave, valor],
-            )
-            .ok();
-        }
+        self.store.salvar_config(chave, valor);
     }
 
     fn ler_config(&self, chave: &str, padrao: &str) -> String {
-        self.abrir()
-            .and_then(|conn| {
-                conn.query_row("SELECT valor FROM config WHERE chave = ?1", [chave], |r| {
-                    r.get::<_, String>(0)
-                })
-                .ok()
-            })
-            .unwrap_or_else(|| padrao.to_string())
+        self.store.ler_config(chave, padrao)
     }
 
     fn salvar_marcacao(&mut self, num_v: i32, cor: Option<&str>, fav: Option<bool>) {
-        if let Some(conn) = self.abrir() {
-            conn.execute(
-                "INSERT OR IGNORE INTO marcacoes (book, chapter, verse, favorito) VALUES (?1, ?2, ?3, 0)",
-                rusqlite::params![self.id_livro, self.capitulo, num_v],
-            )
-            .ok();
-            if let Some(c) = cor {
-                conn.execute(
-                    "UPDATE marcacoes SET cor = ?1 WHERE book = ?2 AND chapter = ?3 AND verse = ?4",
-                    rusqlite::params![c, self.id_livro, self.capitulo, num_v],
-                )
-                .ok();
-            }
-            if let Some(f) = fav {
-                conn.execute(
-                    "UPDATE marcacoes SET favorito = ?1 WHERE book = ?2 AND chapter = ?3 AND verse = ?4",
-                    rusqlite::params![f as i32, self.id_livro, self.capitulo, num_v],
-                )
-                .ok();
-            }
-        }
+        self.store
+            .salvar_marcacao(self.id_livro, self.capitulo, num_v, cor, fav);
         self.carregar_versiculos();
     }
 
-    /// Remove só a cor; se não sobrou nada (nem favorito), apaga a linha.
     fn limpar_cor(&mut self, num_v: i32) {
-        if let Some(conn) = self.abrir() {
-            let p = rusqlite::params![self.id_livro, self.capitulo, num_v];
-            conn.execute(
-                "UPDATE marcacoes SET cor = NULL WHERE book = ?1 AND chapter = ?2 AND verse = ?3",
-                p,
-            )
-            .ok();
-            conn.execute(
-                "DELETE FROM marcacoes WHERE cor IS NULL AND favorito = 0
-                 AND book = ?1 AND chapter = ?2 AND verse = ?3",
-                p,
-            )
-            .ok();
-        }
+        self.store.limpar_cor(self.id_livro, self.capitulo, num_v);
         self.carregar_versiculos();
     }
 
@@ -495,10 +281,12 @@ impl BibliaApp {
             self.livro_em_escolha = None;
         } else if self.tela != Tela::Leitura {
             self.tela = Tela::Leitura;
-        } else if self.aguardando_saida {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        } else {
-            self.aguardando_saida = true;
+        } else if cfg!(not(target_arch = "wasm32")) {
+            if self.aguardando_saida {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.aguardando_saida = true;
+            }
         }
     }
 
@@ -1200,7 +988,7 @@ impl eframe::App for BibliaApp {
                     .fill(p.fundo)
                     .inner_margin(Margin::symmetric(0, 0)),
             )
-            .show_inside(ui, |ui| match self.tela {
+            .show(ui, |ui| match self.tela {
                 Tela::Leitura => self.ui_leitura(ui, &p),
                 Tela::Livros => self.ui_livros(ui, &p),
                 Tela::Busca => self.ui_busca(ui, &p),
