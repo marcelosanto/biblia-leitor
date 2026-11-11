@@ -9,15 +9,17 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 log = "0.4"
 serde = { version = "1.0.229", features = ["derive"] }
-rusqlite = { version = "0.42.0", features = ["bundled"] }
-#unicode-normalization = "0.1.25"
-#
-#
+
 [features]
+# Fonte serifada opcional: coloque assets/fonts/Literata.ttf e use --features fonte_serif
 fonte_serif = []
 
-# --- CONFIGURAÇÃO PARA DESKTOP (Linux/Windows/macOS) ---
-[target.'cfg(not(target_os = "android"))'.dependencies]
+# --- SQLite só fora da web ---
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+
+# --- DESKTOP (Linux/Windows/macOS) ---
+[target.'cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))'.dependencies]
 eframe = { version = "0.37.0", default-features = false, features = [
     "glow",
     "default_fonts",
@@ -26,7 +28,7 @@ eframe = { version = "0.37.0", default-features = false, features = [
 ] }
 env_logger = "0.11.11"
 
-# --- CONFIGURAÇÃO PARA ANDROID ---
+# --- ANDROID ---
 [target.'cfg(target_os = "android")'.dependencies]
 eframe = { version = "0.37.0", default-features = false, features = [
     "glow",
@@ -36,6 +38,25 @@ eframe = { version = "0.37.0", default-features = false, features = [
 winit = { version = "0.30", features = ["android-native-activity"] }
 android_logger = "0.15.1"
 android-activity = "0.6.1"
+
+# --- WEB (wasm32) ---
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { version = "0.37.0", default-features = false, features = [
+    "glow",
+    "default_fonts",
+] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "HtmlCanvasElement",
+    "Storage",
+] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s" # binário menor para a web
+lto = true
 
 [package.metadata.android]
 build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
