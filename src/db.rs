@@ -1,5 +1,3 @@
-use rusqlite::params;
-use std::fs;
 use std::path::PathBuf;
 
 pub fn get_db_path() -> PathBuf {
