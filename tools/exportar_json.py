@@ -1,5 +1,5 @@
 """Exporta assets/biblia.db -> assets/biblia.json (usado só pelo build web).
-Uso (na raiz do projeto):  python3 tools/exportar_json.py
+Uso(na raiz do projeto):  python3 tools/exportar_json.py
 """
 import json
 import sqlite3
