@@ -11,8 +11,8 @@ permissions:
     id-token: write
 
 concurrency:
-    group: pages
-    cancel-in-progress: true
+    group: "pages"
+    cancel-in-progress: false
 
 jobs:
     build:
@@ -25,10 +25,11 @@ jobs:
             - uses: Swatinem/rust-cache@v2
             - name: Gerar assets/biblia.json a partir do biblia.db
               run: python3 tools/exportar_json.py
-            - name: Instalar trunk
-              run: cargo install trunk --locked
+            - name: Instalar trunk (binário pronto)
+              run: |
+                  wget -qO- https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xzf-
             - name: Build web
-              run: trunk build --release --public-url "/${{ github.event.repository.name }}/"
+              run: ./trunk build --release --public-url "/${{ github.event.repository.name }}/"
             - uses: actions/upload-pages-artifact@v3
               with:
                   path: dist
